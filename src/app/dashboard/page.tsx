@@ -34,9 +34,9 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
 
-    // Client-side abort controller with 60s timeout
+    // Client-side abort controller with 2 min timeout
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), 120000);
 
     try {
       const response = await fetch('/api/shopify/analytics', {

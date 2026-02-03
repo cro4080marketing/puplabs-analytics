@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     try {
       productMap = await withTimeout(
         resolveProductsFromUrls(session.shop, session.accessToken, urls),
-        15000,
+        30000,
         'Product resolution'
       );
     } catch (err) {
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
           fetchOrders(session.shop, session.accessToken, dateRange),
           fetchProductViewSessions(session.shop, session.accessToken, productTitles, dateRange),
         ]),
-        30000,
+        90000,
         'Shopify API calls'
       );
     } catch (err) {

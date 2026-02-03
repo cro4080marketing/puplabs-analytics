@@ -1,7 +1,7 @@
 import { ShopifyOrder, DateRange, SessionData } from '@/types';
 
 const API_VERSION = '2024-10';
-const FETCH_TIMEOUT = 15000; // 15 seconds
+const FETCH_TIMEOUT = 30000; // 30 seconds per individual API call
 
 interface ShopifyRequestOptions {
   shop: string;
