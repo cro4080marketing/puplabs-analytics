@@ -115,24 +115,24 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Find checkout/conversion columns on the sessions dataset
+  // Test sales dataset with landing page grouping + try to find conversion/order columns
   const datasets = {
-    // What checkout columns exist on sessions?
-    checkout_sessions: `FROM sessions SHOW sessions, checkout_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try converted_sessions
-    converted_sessions: `FROM sessions SHOW sessions, converted_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try completed_checkout_sessions
-    completed_checkout: `FROM sessions SHOW sessions, completed_checkout_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try orders column
-    orders_col: `FROM sessions SHOW sessions, orders GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try purchase_sessions
-    purchase_sessions: `FROM sessions SHOW sessions, purchase_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try total_sales or net_sales on sessions
-    sales_on_sessions: `FROM sessions SHOW sessions, total_sales GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try sessions with cart_additions
-    cart_sessions: `FROM sessions SHOW sessions, sessions_with_cart_addition GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Try reached_checkout
-    reached_checkout: `FROM sessions SHOW sessions, reached_checkout GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Can sales be grouped by landing_page_path?
+    sales_by_landing: `FROM sales SHOW net_sales GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Sales with referrer info
+    sales_by_referrer_path: `FROM sales SHOW net_sales GROUP BY referrer_path SINCE -7d UNTIL today LIMIT 10`,
+    // Sales with orders count
+    sales_orders_count: `FROM sales SHOW net_sales, gross_sales, total_sales, ordered_product_quantity GROUP BY product_title SINCE -7d UNTIL today LIMIT 5`,
+    // Sales available columns test
+    sales_all_cols: `FROM sales SHOW net_sales, gross_sales, discounts, returns, taxes, total_sales GROUP BY product_title SINCE -7d UNTIL today LIMIT 3`,
+    // Sessions dataset: what other columns besides sessions exist?
+    sessions_visitors: `FROM sessions SHOW sessions, visitors GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
+    // Sessions with conversion
+    sessions_conversion: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
+    // Sessions with orders
+    sessions_orders: `FROM sessions SHOW sessions, total_orders GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
+    // Sessions with converted
+    sessions_converted: `FROM sessions SHOW sessions, converted GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
   };
 
   const datasetResults: Record<string, unknown> = {};
