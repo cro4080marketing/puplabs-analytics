@@ -179,15 +179,16 @@ export async function fetchOrders(
     }
   }
 
-  // Filter out Recharge subscription rebills — only keep normal Shopify checkout orders
+  // Filter out Recharge subscription recurring rebills — keep first subscription orders
+  // "Subscription First Order" = real checkout purchase (keep)
+  // "Subscription Recurring Order" = automated rebill (exclude)
   const filteredOrders = allOrders.filter(order => {
-    const source = (order.source_name || '').toLowerCase();
-    // Exclude orders created by Recharge (recurring subscription rebills)
-    if (source.includes('recharge')) return false;
+    const tags = (order.tags || '').toLowerCase();
+    if (tags.includes('subscription recurring order')) return false;
     return true;
   });
 
-  console.log(`[Shopify] Fetched ${allOrders.length} total orders, ${filteredOrders.length} after excluding Recharge rebills`);
+  console.log(`[Shopify] Fetched ${allOrders.length} total orders, ${filteredOrders.length} after excluding recurring rebills`);
   return filteredOrders;
 }
 
