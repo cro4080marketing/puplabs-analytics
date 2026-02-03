@@ -115,21 +115,24 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test: find revenue columns that work + validate AOV math
-  // Shopify report shows: /products/prodenta → 33 orders, $3,013.53 total sales → AOV $91.32
+  // Test: can we group sales by product_id instead of product_title?
+  // Also test product_variant_id, product_handle, product_url
   const datasets = {
-    // Sales with order count columns
-    sales_ordered_qty: `FROM sales SHOW total_sales, ordered_product_quantity GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
-    sales_orders_count: `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
-    sales_order_count: `FROM sales SHOW total_sales, order_count GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
-    sales_num_orders: `FROM sales SHOW total_sales, number_of_orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
-    // Try total_sales on sessions — maybe there's a column we haven't tried
-    sessions_avg_order: `FROM sessions SHOW sessions, average_order_value GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    sessions_aov: `FROM sessions SHOW sessions, aov GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Working baseline for reference
+    // GROUP BY product_id?
+    sales_by_product_id: `FROM sales SHOW total_sales, orders GROUP BY product_id SINCE -30d UNTIL today LIMIT 10`,
+    // GROUP BY product_variant_id?
+    sales_by_variant_id: `FROM sales SHOW total_sales, orders GROUP BY product_variant_id SINCE -30d UNTIL today LIMIT 10`,
+    // GROUP BY product_handle?
+    sales_by_handle: `FROM sales SHOW total_sales, orders GROUP BY product_handle SINCE -30d UNTIL today LIMIT 10`,
+    // GROUP BY product_url?
+    sales_by_url: `FROM sales SHOW total_sales, orders GROUP BY product_url SINCE -30d UNTIL today LIMIT 10`,
+    // GROUP BY product_type?
+    sales_by_type: `FROM sales SHOW total_sales, orders GROUP BY product_type SINCE -30d UNTIL today LIMIT 10`,
+    // GROUP BY both product_id and product_title to see the mapping?
+    sales_id_and_title: `FROM sales SHOW total_sales, orders GROUP BY product_id, product_title SINCE -30d UNTIL today LIMIT 20`,
+    // Working baseline
+    sales_by_title: `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
     sessions_cvr: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 5`,
-    // Sales baseline — total product sales (for AOV calculation)
-    sales_product_totals: `FROM sales SHOW total_sales, net_sales, gross_sales GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
   };
 
   const datasetResults: Record<string, unknown> = {};
