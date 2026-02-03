@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
-import { resolveProductsFromUrls, fetchOrdersForProduct, fetchProductViewSessions } from '@/lib/shopify';
+import { resolveProductsFromUrls, fetchOrdersForProduct, fetchSessionsByLandingPage, normalizeUrlPath } from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
 import { getCachedData, setCachedData, generateCacheKey, clearCache } from '@/lib/cache';
 import { ComparisonRequest, ComparisonResponse, PageMetrics } from '@/types';
@@ -95,12 +95,15 @@ export async function POST(request: NextRequest) {
 
     // Step 2: For each product, fetch order data + sessions in parallel
     console.log('[Analytics] Fetching per-product order data and sessions...');
-    const productTitles = Array.from(productMap.values()).map(p => p.title);
+
+    // Get URL paths for session lookup (e.g. "/products/prodenta-2", "/pages/fjd-offer-v2")
+    const urlPaths = urls.map(url => normalizeUrlPath(url));
+    console.log(`[Analytics] URL paths for session lookup: ${JSON.stringify(urlPaths)}`);
 
     try {
-      // Fetch sessions (one call for all products) + per-product order data in parallel
-      const sessionPromise = fetchProductViewSessions(
-        session.shop, session.accessToken, productTitles, dateRange
+      // Fetch sessions by landing page path + per-product order data in parallel
+      const sessionPromise = fetchSessionsByLandingPage(
+        session.shop, session.accessToken, urlPaths, dateRange
       );
 
       const orderPromises = urls.map(async (url): Promise<PageMetrics> => {
@@ -118,8 +121,7 @@ export async function POST(request: NextRequest) {
         // Sessions will be filled in after the parallel fetch
         return {
           ...calculatePageMetrics(url, product.title, 0, orderData.totalRevenue, orderData.orderCount),
-          _productTitle: product.title,
-        } as PageMetrics & { _productTitle: string };
+        };
       });
 
       const [sessionMap, ...pageResults] = await withTimeout(
@@ -128,9 +130,11 @@ export async function POST(request: NextRequest) {
         'Shopify API calls'
       );
 
-      // Fill in sessions from the session map
-      const pages: PageMetrics[] = (pageResults as PageMetrics[]).map(page => {
-        const sessions = (sessionMap as Map<string, number>).get(page.productTitle) || 0;
+      // Fill in sessions from the session map (matched by URL path)
+      const pages: PageMetrics[] = (pageResults as PageMetrics[]).map((page, idx) => {
+        const urlPath = urlPaths[idx];
+        const sessions = (sessionMap as Map<string, number>).get(urlPath) || 0;
+        console.log(`[Analytics] Sessions for "${urlPath}": ${sessions}`);
         return calculatePageMetrics(
           page.url,
           page.productTitle,

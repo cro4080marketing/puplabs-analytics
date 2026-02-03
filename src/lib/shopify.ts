@@ -225,30 +225,26 @@ export async function fetchOrdersForProduct(
 // PRODUCT VIEW SESSIONS (via ShopifyQL products dataset)
 // ============================================================
 
-export async function fetchProductViewSessions(
+// Fetch sessions per landing page path using ShopifyQL sessions dataset.
+// Takes URL paths (e.g. ["/products/prodenta-2", "/pages/fjd-offer-v2"])
+// and returns a map of path → session count.
+export async function fetchSessionsByLandingPage(
   shop: string,
   accessToken: string,
-  productTitles: string[],
+  urlPaths: string[],
   dateRange: DateRange
 ): Promise<Map<string, number>> {
   const sessionMap = new Map<string, number>();
 
-  for (const title of productTitles) {
-    sessionMap.set(title, 0);
+  for (const path of urlPaths) {
+    sessionMap.set(path, 0);
   }
 
-  // ShopifyQL query against the products dataset.
-  // GROUP BY product_title so view_sessions are summed across all time intervals.
-  const shopifyqlQuery = `
-    FROM products
-    SHOW sum(view_sessions) AS view_sessions
-    GROUP BY product_title
-    SINCE ${dateRange.start}
-    UNTIL ${dateRange.end}
-    ORDER BY view_sessions DESC
-  `;
+  // Query the sessions dataset grouped by landing_page_path.
+  // This returns all landing pages with their session counts.
+  // We fetch a large LIMIT to ensure our target pages are included.
+  const shopifyqlQuery = `FROM sessions SHOW sessions GROUP BY landing_page_path SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
 
-  // Use 2026-01 API version — returns ShopifyqlQueryResponse directly (not a union type)
   const query = `
     {
       shopifyqlQuery(query: """${shopifyqlQuery}""") {
@@ -257,7 +253,6 @@ export async function fetchProductViewSessions(
           columns {
             name
             dataType
-            displayName
           }
         }
         parseErrors
@@ -266,9 +261,8 @@ export async function fetchProductViewSessions(
   `;
 
   try {
-    console.log(`[Shopify] ShopifyQL query: ${shopifyqlQuery.trim()}`);
-    console.log(`[Shopify] Looking for product titles: ${JSON.stringify(productTitles)}`);
-    console.log(`[Shopify] Using API version: ${SHOPIFYQL_API_VERSION}`);
+    console.log(`[Shopify] ShopifyQL sessions query for ${urlPaths.length} paths`);
+    console.log(`[Shopify] Target paths: ${JSON.stringify(urlPaths)}`);
 
     const response = await fetchWithTimeout(
       `https://${shop}/admin/api/${SHOPIFYQL_API_VERSION}/graphql.json`,
@@ -290,7 +284,6 @@ export async function fetchProductViewSessions(
     }
 
     const data = await response.json();
-    console.log(`[Shopify] ShopifyQL response __typename: ${data.data?.shopifyqlQuery?.__typename}`);
 
     if (data.errors) {
       console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
@@ -299,55 +292,48 @@ export async function fetchProductViewSessions(
 
     const qlResult = data.data?.shopifyqlQuery;
 
-    // parseErrors in 2026-01 is [String!]! (array of strings)
     if (qlResult?.parseErrors?.length > 0) {
       console.error('[Shopify] ShopifyQL parse errors:', JSON.stringify(qlResult.parseErrors));
       return sessionMap;
     }
 
-    // Handle TableResponse format
     const tableData = qlResult?.tableData;
-    // 2026-01 uses "rows", older versions used "rowData" — handle both
-    const rows = tableData?.rows || tableData?.rowData;
+    const rows = tableData?.rows;
 
     if (rows && rows.length > 0) {
-      const columns = tableData.columns || [];
-      console.log(`[Shopify] ShopifyQL columns: ${JSON.stringify(columns.map((c: { name: string; dataType: string }) => `${c.name}(${c.dataType})`))}`);
-      console.log(`[Shopify] ShopifyQL row count: ${rows.length}`);
+      console.log(`[Shopify] ShopifyQL returned ${rows.length} landing page rows`);
 
-      // Log first 3 rows for debugging
-      for (let i = 0; i < Math.min(3, rows.length); i++) {
+      // Log first 5 rows for debugging
+      for (let i = 0; i < Math.min(5, rows.length); i++) {
         console.log(`[Shopify] ShopifyQL row[${i}]: ${JSON.stringify(rows[i])}`);
       }
 
-      const titleIdx = columns.findIndex((c: { name: string }) => c.name === 'product_title');
-      const sessionsIdx = columns.findIndex((c: { name: string }) => c.name === 'view_sessions');
+      // Match rows to our target URL paths
+      for (const row of rows) {
+        const landingPath = String(row.landing_page_path || '').toLowerCase();
+        const sessions = parseInt(String(row.sessions || '0'), 10);
 
-      if (titleIdx >= 0 && sessionsIdx >= 0) {
-        for (const row of rows) {
-          const title = row[titleIdx];
-          const rawSessions = row[sessionsIdx];
-          const sessions = typeof rawSessions === 'number' ? rawSessions : parseInt(String(rawSessions || '0'), 10);
-
-          for (const targetTitle of productTitles) {
-            if (title && targetTitle.toLowerCase() === String(title).toLowerCase()) {
-              const current = sessionMap.get(targetTitle) || 0;
-              sessionMap.set(targetTitle, current + (isNaN(sessions) ? 0 : sessions));
-              console.log(`[Shopify] Matched "${targetTitle}" → ${sessions} sessions`);
-            }
+        for (const targetPath of urlPaths) {
+          const normalizedTarget = targetPath.toLowerCase();
+          // Match exact path or path with/without trailing slash
+          if (
+            landingPath === normalizedTarget ||
+            landingPath === normalizedTarget + '/' ||
+            landingPath + '/' === normalizedTarget
+          ) {
+            const current = sessionMap.get(targetPath) || 0;
+            sessionMap.set(targetPath, current + (isNaN(sessions) ? 0 : sessions));
+            console.log(`[Shopify] Matched path "${targetPath}" → ${sessions} sessions`);
           }
         }
-        console.log(`[Shopify] ShopifyQL returned ${rows.length} product rows, matched ${Array.from(sessionMap.values()).filter(v => v > 0).length} products`);
-      } else {
-        console.warn(`[Shopify] ShopifyQL column indices — product_title: ${titleIdx}, view_sessions: ${sessionsIdx}`);
-        console.warn('[Shopify] Available columns:', columns.map((c: { name: string }) => c.name));
       }
-    }
-    else {
-      console.warn('[Shopify] No row data in ShopifyQL response. Full result:', JSON.stringify(qlResult).substring(0, 500));
+
+      console.log(`[Shopify] Matched ${Array.from(sessionMap.values()).filter(v => v > 0).length}/${urlPaths.length} paths with session data`);
+    } else {
+      console.warn('[Shopify] No rows in ShopifyQL sessions response');
     }
   } catch (error) {
-    console.error('[Shopify] Failed to fetch product view sessions:', error);
+    console.error('[Shopify] Failed to fetch landing page sessions:', error);
   }
 
   console.log(`[Shopify] Final session map: ${JSON.stringify(Object.fromEntries(sessionMap))}`);
