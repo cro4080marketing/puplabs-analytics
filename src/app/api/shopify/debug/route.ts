@@ -115,24 +115,11 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test: can we group sales by product_id instead of product_title?
-  // Also test product_variant_id, product_handle, product_url
+  // Debug: check path matching for specific URLs
+  // Test with date range matching the user's dashboard (Jan 26 - Feb 4)
   const datasets = {
-    // GROUP BY product_id?
-    sales_by_product_id: `FROM sales SHOW total_sales, orders GROUP BY product_id SINCE -30d UNTIL today LIMIT 10`,
-    // GROUP BY product_variant_id?
-    sales_by_variant_id: `FROM sales SHOW total_sales, orders GROUP BY product_variant_id SINCE -30d UNTIL today LIMIT 10`,
-    // GROUP BY product_handle?
-    sales_by_handle: `FROM sales SHOW total_sales, orders GROUP BY product_handle SINCE -30d UNTIL today LIMIT 10`,
-    // GROUP BY product_url?
-    sales_by_url: `FROM sales SHOW total_sales, orders GROUP BY product_url SINCE -30d UNTIL today LIMIT 10`,
-    // GROUP BY product_type?
-    sales_by_type: `FROM sales SHOW total_sales, orders GROUP BY product_type SINCE -30d UNTIL today LIMIT 10`,
-    // GROUP BY both product_id and product_title to see the mapping?
-    sales_id_and_title: `FROM sales SHOW total_sales, orders GROUP BY product_id, product_title SINCE -30d UNTIL today LIMIT 20`,
-    // Working baseline
-    sales_by_title: `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
-    sessions_cvr: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 5`,
+    // Top 50 landing pages by sessions to see what comes back
+    top_sessions: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE 2026-01-26 UNTIL 2026-02-04 LIMIT 5000`,
   };
 
   const datasetResults: Record<string, unknown> = {};
@@ -154,6 +141,43 @@ export async function GET(request: NextRequest) {
   }
 
   results.datasets = datasetResults;
+
+  // Post-process: find all earclear-related rows and show path matching analysis
+  const topSessions = datasetResults.top_sessions as { tableData?: { rows?: Record<string, string>[] } };
+  const allRows = topSessions?.tableData?.rows || [];
+  results.totalLandingPages = allRows.length;
+
+  // Find all rows containing "earclear" in the path
+  const earclearRows = allRows.filter((row: Record<string, string>) =>
+    String(row.landing_page_path || '').toLowerCase().includes('earclear')
+  );
+  results.earclearPaths = earclearRows.map((row: Record<string, string>) => ({
+    path: row.landing_page_path,
+    sessions: row.sessions,
+    conversion_rate: row.conversion_rate,
+  }));
+
+  // Show what our matching logic would do for these target paths
+  const targetPaths = ['/products/k9-earclear-v3', '/products/k9-earclear'];
+  const matchingAnalysis: Record<string, unknown> = {};
+  for (const target of targetPaths) {
+    const normalizedTarget = target.toLowerCase();
+    const matches = allRows.filter((row: Record<string, string>) => {
+      const landingPath = String(row.landing_page_path || '').toLowerCase();
+      return landingPath === normalizedTarget ||
+        landingPath === normalizedTarget + '/' ||
+        landingPath + '/' === normalizedTarget;
+    });
+    matchingAnalysis[target] = {
+      matchCount: matches.length,
+      matches: matches.map((row: Record<string, string>) => ({
+        path: row.landing_page_path,
+        sessions: row.sessions,
+        conversion_rate: row.conversion_rate,
+      })),
+    };
+  }
+  results.matchingAnalysis = matchingAnalysis;
 
   return NextResponse.json(results, {
     headers: { 'Cache-Control': 'no-store' },
