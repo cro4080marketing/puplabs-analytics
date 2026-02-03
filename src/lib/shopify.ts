@@ -202,6 +202,16 @@ export async function fetchLandingPageData(
     console.log(`[Shopify] ShopifyQL sessions+conversion query for ${urlPaths.length} paths`);
     const rows = await runShopifyQL(shop, accessToken, shopifyqlQuery);
     console.log(`[Shopify] ShopifyQL returned ${rows.length} landing page rows`);
+    console.log(`[Shopify] Looking for paths: ${JSON.stringify(urlPaths)}`);
+
+    // Debug: find any rows that contain our target product handles
+    for (const targetPath of urlPaths) {
+      const handle = targetPath.toLowerCase().split('/').pop() || '';
+      const partialMatches = rows.filter(r =>
+        String(r.landing_page_path || '').toLowerCase().includes(handle)
+      );
+      console.log(`[Shopify] DEBUG: Rows containing "${handle}": ${JSON.stringify(partialMatches.map(r => ({ path: r.landing_page_path, sessions: r.sessions })))}`);
+    }
 
     for (const row of rows) {
       const landingPath = String(row.landing_page_path || '').toLowerCase();
