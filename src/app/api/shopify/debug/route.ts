@@ -115,24 +115,24 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Explore the two working datasets to find product-level session data
+  // Explore datasets — no ORDER BY with functions, use simple syntax
   const datasets = {
-    // sessions dataset: try grouping by landing_page to get per-page sessions
-    sessions_by_landing_page: `FROM sessions SHOW sum(sessions) GROUP BY landing_page SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
-    // sessions dataset: try grouping by page_path
-    sessions_by_page_path: `FROM sessions SHOW sum(sessions) GROUP BY page_path SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
-    // sessions dataset: try grouping by referrer_path
-    sessions_by_referrer: `FROM sessions SHOW sum(sessions) GROUP BY referrer_source SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
-    // sessions dataset: try grouping by utm_campaign
-    sessions_by_utm: `FROM sessions SHOW sum(sessions) GROUP BY utm_campaign_name SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
-    // sessions dataset: try grouping by landing_page_path
-    sessions_by_landing_path: `FROM sessions SHOW sum(sessions) GROUP BY landing_page_path SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
-    // sales dataset: product-level with group by
-    sales_by_product: `FROM sales SHOW product_title, sum(net_sales) GROUP BY product_title SINCE -7d UNTIL today ORDER BY sum(net_sales) DESC LIMIT 5`,
-    // sales with product_type
-    sales_columns: `FROM sales SHOW product_title, product_type, sum(net_sales), sum(ordered_product_quantity) GROUP BY product_title, product_type SINCE -7d UNTIL today LIMIT 5`,
-    // sessions: just show all possible columns
-    sessions_all: `FROM sessions SHOW sessions SINCE -1d UNTIL today LIMIT 1`,
+    // sessions: group by landing_page
+    s_landing_page: `FROM sessions SHOW sessions GROUP BY landing_page SINCE -7d UNTIL today LIMIT 10`,
+    // sessions: group by page_path
+    s_page_path: `FROM sessions SHOW sessions GROUP BY page_path SINCE -7d UNTIL today LIMIT 10`,
+    // sessions: group by referrer_source
+    s_referrer: `FROM sessions SHOW sessions GROUP BY referrer_source SINCE -7d UNTIL today LIMIT 10`,
+    // sessions: group by utm_campaign_name
+    s_utm: `FROM sessions SHOW sessions GROUP BY utm_campaign_name SINCE -7d UNTIL today LIMIT 10`,
+    // sessions: group by landing_page_path
+    s_landing_path: `FROM sessions SHOW sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // sessions: group by page_type or session_token
+    s_page_type: `FROM sessions SHOW sessions GROUP BY page_type SINCE -7d UNTIL today LIMIT 10`,
+    // sales: simple group by product_title (no sum function)
+    sales_product: `FROM sales SHOW net_sales GROUP BY product_title SINCE -7d UNTIL today LIMIT 5`,
+    // sales: what columns exist?
+    sales_basic: `FROM sales SHOW product_title, net_sales SINCE -7d UNTIL today GROUP BY product_title LIMIT 5`,
   };
 
   const datasetResults: Record<string, unknown> = {};
