@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 const API_VERSION = '2025-01';
 
@@ -12,10 +13,40 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
+  // Get stored scope from database
+  const shopRecord = await prisma.shop.findUnique({
+    where: { domain: session.shop },
+    select: { scope: true, updatedAt: true },
+  });
+
   const results: Record<string, unknown> = {
     shop: session.shop,
     timestamp: new Date().toISOString(),
+    storedScope: shopRecord?.scope || 'NOT FOUND',
+    tokenUpdatedAt: shopRecord?.updatedAt || 'NOT FOUND',
   };
+
+  // Check actual granted scopes from Shopify
+  try {
+    const scopeRes = await fetch(
+      `https://${session.shop}/admin/oauth/access_scopes.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': session.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    if (scopeRes.ok) {
+      const scopeData = await scopeRes.json();
+      results.grantedScopes = scopeData.access_scopes?.map((s: { handle: string }) => s.handle) || [];
+      results.hasReadReports = results.grantedScopes && (results.grantedScopes as string[]).includes('read_reports');
+    } else {
+      results.scopeError = `HTTP ${scopeRes.status}: ${await scopeRes.text()}`;
+    }
+  } catch (err) {
+    results.scopeError = String(err);
+  }
 
   // Test 1: Check available scopes via a simple shop query
   try {
