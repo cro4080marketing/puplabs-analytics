@@ -1,6 +1,6 @@
 import { DateRange } from '@/types';
 
-const API_VERSION = '2024-10';
+const API_VERSION = '2025-01';
 const FETCH_TIMEOUT = 30000; // 30 seconds per individual API call
 
 interface ShopifyRequestOptions {
@@ -236,11 +236,15 @@ export async function fetchProductViewSessions(
     sessionMap.set(title, 0);
   }
 
+  // ShopifyQL query against the products dataset.
+  // GROUP BY product_title so view_sessions are summed across all time intervals.
   const shopifyqlQuery = `
     FROM products
-    SHOW product_title, view_sessions
+    SHOW sum(view_sessions) AS view_sessions
+    GROUP BY product_title
     SINCE ${dateRange.start}
     UNTIL ${dateRange.end}
+    ORDER BY view_sessions DESC
   `;
 
   const query = `
@@ -256,6 +260,15 @@ export async function fetchProductViewSessions(
             }
           }
         }
+        ... on PolarisVizResponse {
+          data {
+            key
+            data {
+              key
+              value
+            }
+          }
+        }
         parseErrors {
           code
           message
@@ -265,7 +278,8 @@ export async function fetchProductViewSessions(
   `;
 
   try {
-    console.log(`[Shopify] Querying ShopifyQL products dataset for view_sessions...`);
+    console.log(`[Shopify] ShopifyQL query: ${shopifyqlQuery.trim()}`);
+    console.log(`[Shopify] Looking for product titles: ${JSON.stringify(productTitles)}`);
 
     const response = await fetchWithTimeout(
       `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
@@ -277,56 +291,91 @@ export async function fetchProductViewSessions(
         },
         body: JSON.stringify({ query }),
       },
-      10000
+      30000
     );
 
     if (!response.ok) {
-      console.error(`[Shopify] ShopifyQL GraphQL error: ${response.status}`);
+      const errorText = await response.text();
+      console.error(`[Shopify] ShopifyQL HTTP error ${response.status}: ${errorText}`);
       return sessionMap;
     }
 
     const data = await response.json();
+    console.log(`[Shopify] ShopifyQL response __typename: ${data.data?.shopifyqlQuery?.__typename}`);
 
     if (data.errors) {
-      console.error('[Shopify] GraphQL errors:', data.errors);
+      console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
       return sessionMap;
     }
 
     const qlResult = data.data?.shopifyqlQuery;
 
     if (qlResult?.parseErrors?.length > 0) {
-      console.error('[Shopify] ShopifyQL parse errors:', qlResult.parseErrors);
+      console.error('[Shopify] ShopifyQL parse errors:', JSON.stringify(qlResult.parseErrors));
       return sessionMap;
     }
 
+    // Handle TableResponse format
     const tableData = qlResult?.tableData;
     if (tableData?.rowData) {
       const columns = tableData.columns || [];
+      console.log(`[Shopify] ShopifyQL columns: ${JSON.stringify(columns.map((c: { name: string; dataType: string }) => `${c.name}(${c.dataType})`))}`);
+      console.log(`[Shopify] ShopifyQL row count: ${tableData.rowData.length}`);
+
+      // Log first 3 rows for debugging
+      for (let i = 0; i < Math.min(3, tableData.rowData.length); i++) {
+        console.log(`[Shopify] ShopifyQL row[${i}]: ${JSON.stringify(tableData.rowData[i])}`);
+      }
+
       const titleIdx = columns.findIndex((c: { name: string }) => c.name === 'product_title');
       const sessionsIdx = columns.findIndex((c: { name: string }) => c.name === 'view_sessions');
 
       if (titleIdx >= 0 && sessionsIdx >= 0) {
         for (const row of tableData.rowData) {
           const title = row[titleIdx];
-          const sessions = parseInt(row[sessionsIdx] || '0', 10);
+          const rawSessions = row[sessionsIdx];
+          const sessions = typeof rawSessions === 'number' ? rawSessions : parseInt(String(rawSessions || '0'), 10);
 
           for (const targetTitle of productTitles) {
-            if (title && targetTitle.toLowerCase() === title.toLowerCase()) {
-              sessionMap.set(targetTitle, isNaN(sessions) ? 0 : sessions);
+            if (title && targetTitle.toLowerCase() === String(title).toLowerCase()) {
+              const current = sessionMap.get(targetTitle) || 0;
+              sessionMap.set(targetTitle, current + (isNaN(sessions) ? 0 : sessions));
+              console.log(`[Shopify] Matched "${targetTitle}" → ${sessions} sessions`);
             }
           }
         }
-        console.log(`[Shopify] ShopifyQL returned ${tableData.rowData.length} product rows`);
+        console.log(`[Shopify] ShopifyQL returned ${tableData.rowData.length} product rows, matched ${Array.from(sessionMap.values()).filter(v => v > 0).length} products`);
       } else {
-        console.warn('[Shopify] ShopifyQL columns not found. Available:', columns.map((c: { name: string }) => c.name));
+        console.warn(`[Shopify] ShopifyQL column indices — product_title: ${titleIdx}, view_sessions: ${sessionsIdx}`);
+        console.warn('[Shopify] Available columns:', columns.map((c: { name: string }) => c.name));
       }
-    } else {
-      console.warn('[Shopify] No tableData in ShopifyQL response');
+    }
+    // Handle PolarisVizResponse format (alternate response type)
+    else if (qlResult?.data) {
+      console.log(`[Shopify] ShopifyQL returned PolarisVizResponse with ${qlResult.data.length} series`);
+      for (const series of qlResult.data) {
+        const seriesTitle = series.key;
+        for (const point of series.data || []) {
+          if (point.key === 'view_sessions') {
+            const sessions = typeof point.value === 'number' ? point.value : parseInt(String(point.value || '0'), 10);
+            for (const targetTitle of productTitles) {
+              if (seriesTitle && targetTitle.toLowerCase() === String(seriesTitle).toLowerCase()) {
+                sessionMap.set(targetTitle, isNaN(sessions) ? 0 : sessions);
+                console.log(`[Shopify] PolarisViz matched "${targetTitle}" → ${sessions} sessions`);
+              }
+            }
+          }
+        }
+      }
+    }
+    else {
+      console.warn('[Shopify] No tableData or data in ShopifyQL response. Full result:', JSON.stringify(qlResult).substring(0, 500));
     }
   } catch (error) {
     console.error('[Shopify] Failed to fetch product view sessions:', error);
   }
 
+  console.log(`[Shopify] Final session map: ${JSON.stringify(Object.fromEntries(sessionMap))}`);
   return sessionMap;
 }
 
