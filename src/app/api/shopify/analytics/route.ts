@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
-import { resolveProductsFromUrls, fetchOrdersForProduct, fetchSessionsByLandingPage, normalizeUrlPath } from '@/lib/shopify';
+import {
+  resolveProductsFromUrls,
+  fetchLandingPageData,
+  fetchProductSales,
+  normalizeUrlPath,
+} from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
 import { getCachedData, setCachedData, generateCacheKey, clearCache } from '@/lib/cache';
 import { ComparisonRequest, ComparisonResponse, PageMetrics } from '@/types';
@@ -75,7 +80,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 1: Resolve product page URLs to actual products
+    // Step 1: Resolve product page URLs to actual products (for titles)
     console.log('[Analytics] Resolving product URLs...');
     let productMap;
     try {
@@ -93,58 +98,90 @@ export async function POST(request: NextRequest) {
     }
     console.log(`[Analytics] Resolved ${productMap.size}/${urls.length} products (${Date.now() - startTime}ms)`);
 
-    // Step 2: For each product, fetch order data + sessions in parallel
-    console.log('[Analytics] Fetching per-product order data and sessions...');
-
-    // Get URL paths for session lookup (e.g. "/products/prodenta-2", "/pages/fjd-offer-v2")
+    // Get URL paths for ShopifyQL lookup
     const urlPaths = urls.map(url => normalizeUrlPath(url));
-    console.log(`[Analytics] URL paths for session lookup: ${JSON.stringify(urlPaths)}`);
+    console.log(`[Analytics] URL paths: ${JSON.stringify(urlPaths)}`);
+
+    // Get product titles for sales lookup
+    const productTitles = urls
+      .map(url => productMap.get(url)?.title)
+      .filter((t): t is string => !!t);
+    console.log(`[Analytics] Product titles for sales lookup: ${JSON.stringify(productTitles)}`);
 
     try {
-      // Fetch sessions by landing page path + per-product order data in parallel
-      const sessionPromise = fetchSessionsByLandingPage(
-        session.shop, session.accessToken, urlPaths, dateRange
+      // Step 2: Fetch ShopifyQL data in parallel
+      // - Landing page data: sessions + conversion_rate per landing_page_path
+      // - Product sales: net_sales per product_title
+      console.log('[Analytics] Fetching ShopifyQL data (sessions + sales)...');
+
+      const [landingPageMap, salesMap] = await withTimeout(
+        Promise.all([
+          fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
+          fetchProductSales(session.shop, session.accessToken, productTitles, dateRange),
+        ]),
+        60000,
+        'ShopifyQL queries'
       );
 
-      const orderPromises = urls.map(async (url): Promise<PageMetrics> => {
+      console.log(`[Analytics] ShopifyQL data fetched (${Date.now() - startTime}ms)`);
+
+      // Step 3: Build page metrics
+      // Orders come from sessions × conversion_rate (matches Shopify's "Sessions that completed checkout")
+      // Revenue comes from the sales dataset (net_sales per product)
+      // Since sales are per-product (not per-landing-page), we pro-rate revenue:
+      //   landing_page_revenue = (landing_page_orders / total_product_orders) × product_net_sales
+      //   If there's only one landing page per product, it gets all the revenue.
+
+      // First, sum up total orders across all landing pages per product title
+      // so we can pro-rate revenue
+      const totalOrdersByProduct = new Map<string, number>();
+      for (const url of urls) {
         const product = productMap.get(url);
-        if (!product) {
-          return calculatePageMetrics(url, 'Unknown Product', 0, 0, 0);
+        if (!product) continue;
+        const urlPath = normalizeUrlPath(url);
+        const lpData = landingPageMap.get(urlPath);
+        const orders = lpData?.orders || 0;
+        const existing = totalOrdersByProduct.get(product.title) || 0;
+        totalOrdersByProduct.set(product.title, existing + orders);
+      }
+
+      const pages: PageMetrics[] = urls.map((url, idx) => {
+        const product = productMap.get(url);
+        const urlPath = urlPaths[idx];
+        const lpData = landingPageMap.get(urlPath);
+
+        if (!product || !lpData) {
+          console.log(`[Analytics] No data for "${urlPath}" — product: ${product?.title || 'unknown'}`);
+          return calculatePageMetrics(
+            url,
+            product?.title || 'Unknown Product',
+            0,
+            0,
+            0
+          );
         }
 
-        const orderData = await fetchOrdersForProduct(
-          session.shop, session.accessToken, product.id, dateRange
+        const { sessions, conversionRate, orders } = lpData;
+        const productNetSales = salesMap.get(product.title) || 0;
+        const totalProductOrders = totalOrdersByProduct.get(product.title) || 0;
+
+        // Pro-rate revenue: this landing page's share of total product revenue
+        let revenue = 0;
+        if (totalProductOrders > 0 && orders > 0) {
+          revenue = (orders / totalProductOrders) * productNetSales;
+        }
+
+        console.log(
+          `[Analytics] ${urlPath} → "${product.title}": ` +
+          `${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ` +
+          `${orders} orders, $${revenue.toFixed(2)} revenue ` +
+          `(product total: $${productNetSales}, ${totalProductOrders} orders across all pages)`
         );
 
-        console.log(`[Analytics] ${url} → "${product.title}": ${orderData.orderCount} orders, $${orderData.totalRevenue} revenue`);
-
-        // Sessions will be filled in after the parallel fetch
-        return {
-          ...calculatePageMetrics(url, product.title, 0, orderData.totalRevenue, orderData.orderCount),
-        };
+        return calculatePageMetrics(url, product.title, sessions, revenue, orders);
       });
 
-      const [sessionMap, ...pageResults] = await withTimeout(
-        Promise.all([sessionPromise, ...orderPromises]),
-        90000,
-        'Shopify API calls'
-      );
-
-      // Fill in sessions from the session map (matched by URL path)
-      const pages: PageMetrics[] = (pageResults as PageMetrics[]).map((page, idx) => {
-        const urlPath = urlPaths[idx];
-        const sessions = (sessionMap as Map<string, number>).get(urlPath) || 0;
-        console.log(`[Analytics] Sessions for "${urlPath}": ${sessions}`);
-        return calculatePageMetrics(
-          page.url,
-          page.productTitle,
-          sessions,
-          page.totalRevenue,
-          page.orderCount
-        );
-      });
-
-      console.log(`[Analytics] All products processed (${Date.now() - startTime}ms)`);
+      console.log(`[Analytics] All pages processed (${Date.now() - startTime}ms)`);
 
       const response: ComparisonResponse = {
         pages,
@@ -162,7 +199,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(response);
 
     } catch (err) {
-      console.error(`[Analytics] Shopify API calls failed (${Date.now() - startTime}ms):`, err);
+      console.error(`[Analytics] ShopifyQL queries failed (${Date.now() - startTime}ms):`, err);
       return NextResponse.json(
         { error: 'Shopify API request timed out. Try a shorter date range or fewer URLs.' },
         { status: 504 }

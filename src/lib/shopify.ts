@@ -119,241 +119,157 @@ export async function resolveProductsFromUrls(
 }
 
 // ============================================================
-// PER-PRODUCT ORDER DATA (GraphQL — fast, targeted)
+// LANDING PAGE ANALYTICS (ShopifyQL — sessions + conversion_rate)
 // ============================================================
 
-export interface ProductOrderData {
-  orderCount: number;
-  totalRevenue: number;
+export interface LandingPageData {
+  sessions: number;
+  conversionRate: number;
+  orders: number; // derived: Math.round(sessions * conversionRate)
 }
 
-// Fetch order count and total revenue for a specific product using GraphQL.
-// Only counts first-time purchases: customer.numberOfOrders == 1.
-// This excludes ALL repeat orders (Recharge rebills, manual reorders, etc.)
-export async function fetchOrdersForProduct(
+// Helper: run a ShopifyQL query and return parsed rows
+async function runShopifyQL(
   shop: string,
   accessToken: string,
-  productId: number,
-  dateRange: DateRange
-): Promise<ProductOrderData> {
-  let totalRevenue = 0;
-  let orderCount = 0;
-  let skippedRepeat = 0;
-  let totalFetched = 0;
-  let cursor: string | null = null;
-  let hasMore = true;
-
-  while (hasMore) {
-    const afterClause = cursor ? `, after: "${cursor}"` : '';
-
-    // Fetch orders with customer data to check if it's their first order
-    const query = `
-      {
-        orders(first: 100, query: "product_id:${productId} created_at:>=${dateRange.start} created_at:<=${dateRange.end}"${afterClause}) {
-          edges {
-            node {
-              id
-              name
-              totalPriceSet {
-                shopMoney {
-                  amount
-                }
-              }
-              tags
-              customer {
-                numberOfOrders
-              }
-            }
-            cursor
-          }
-          pageInfo {
-            hasNextPage
-          }
-        }
-      }
-    `;
-
-    try {
-      const response = await fetchWithTimeout(
-        `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
-        {
-          method: 'POST',
-          headers: {
-            'X-Shopify-Access-Token': accessToken,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ query }),
-        },
-        20000
-      );
-
-      if (!response.ok) {
-        console.error(`[Shopify] GraphQL orders error: ${response.status}`);
-        break;
-      }
-
-      const data = await response.json();
-
-      if (data.errors) {
-        console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
-        break;
-      }
-
-      const edges = data.data?.orders?.edges || [];
-      totalFetched += edges.length;
-
-      for (const edge of edges) {
-        const order = edge.node;
-        const customerOrderCount = parseInt(order.customer?.numberOfOrders || '0', 10);
-
-        // Only count first-time purchases (customer has exactly 1 order total)
-        if (customerOrderCount !== 1) {
-          skippedRepeat++;
-          continue;
-        }
-
-        const amount = parseFloat(order.totalPriceSet?.shopMoney?.amount || '0');
-        totalRevenue += amount;
-        orderCount++;
-      }
-
-      const pageInfo = data.data?.orders?.pageInfo;
-      hasMore = pageInfo?.hasNextPage === true;
-
-      if (hasMore && edges.length > 0) {
-        cursor = edges[edges.length - 1].cursor;
-        // Rate limiting between pages
-        await new Promise(resolve => setTimeout(resolve, 300));
-      } else {
-        hasMore = false;
-      }
-    } catch (error) {
-      console.error(`[Shopify] Failed to fetch orders for product ${productId}:`, error);
-      break;
-    }
-  }
-
-  console.log(`[Shopify] Product ${productId}: ${totalFetched} total fetched, ${skippedRepeat} repeat customers skipped, ${orderCount} first-time orders counted, $${Math.round(totalRevenue * 100) / 100} revenue`);
-  return { orderCount, totalRevenue: Math.round(totalRevenue * 100) / 100 };
-}
-
-// ============================================================
-// PRODUCT VIEW SESSIONS (via ShopifyQL products dataset)
-// ============================================================
-
-// Fetch sessions per landing page path using ShopifyQL sessions dataset.
-// Takes URL paths (e.g. ["/products/prodenta-2", "/pages/fjd-offer-v2"])
-// and returns a map of path → session count.
-export async function fetchSessionsByLandingPage(
-  shop: string,
-  accessToken: string,
-  urlPaths: string[],
-  dateRange: DateRange
-): Promise<Map<string, number>> {
-  const sessionMap = new Map<string, number>();
-
-  for (const path of urlPaths) {
-    sessionMap.set(path, 0);
-  }
-
-  // Query the sessions dataset grouped by landing_page_path.
-  // This returns all landing pages with their session counts.
-  // We fetch a large LIMIT to ensure our target pages are included.
-  const shopifyqlQuery = `FROM sessions SHOW sessions GROUP BY landing_page_path SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
-
+  shopifyqlQuery: string
+): Promise<Record<string, string>[]> {
   const query = `
     {
       shopifyqlQuery(query: """${shopifyqlQuery}""") {
         tableData {
           rows
-          columns {
-            name
-            dataType
-          }
+          columns { name dataType }
         }
         parseErrors
       }
     }
   `;
 
-  try {
-    console.log(`[Shopify] ShopifyQL sessions query for ${urlPaths.length} paths`);
-    console.log(`[Shopify] Target paths: ${JSON.stringify(urlPaths)}`);
-
-    const response = await fetchWithTimeout(
-      `https://${shop}/admin/api/${SHOPIFYQL_API_VERSION}/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query }),
+  const response = await fetchWithTimeout(
+    `https://${shop}/admin/api/${SHOPIFYQL_API_VERSION}/graphql.json`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json',
       },
-      30000
-    );
+      body: JSON.stringify({ query }),
+    },
+    30000
+  );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Shopify] ShopifyQL HTTP error ${response.status}: ${errorText}`);
-      return sessionMap;
-    }
-
-    const data = await response.json();
-
-    if (data.errors) {
-      console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
-      return sessionMap;
-    }
-
-    const qlResult = data.data?.shopifyqlQuery;
-
-    if (qlResult?.parseErrors?.length > 0) {
-      console.error('[Shopify] ShopifyQL parse errors:', JSON.stringify(qlResult.parseErrors));
-      return sessionMap;
-    }
-
-    const tableData = qlResult?.tableData;
-    const rows = tableData?.rows;
-
-    if (rows && rows.length > 0) {
-      console.log(`[Shopify] ShopifyQL returned ${rows.length} landing page rows`);
-
-      // Log first 5 rows for debugging
-      for (let i = 0; i < Math.min(5, rows.length); i++) {
-        console.log(`[Shopify] ShopifyQL row[${i}]: ${JSON.stringify(rows[i])}`);
-      }
-
-      // Match rows to our target URL paths
-      for (const row of rows) {
-        const landingPath = String(row.landing_page_path || '').toLowerCase();
-        const sessions = parseInt(String(row.sessions || '0'), 10);
-
-        for (const targetPath of urlPaths) {
-          const normalizedTarget = targetPath.toLowerCase();
-          // Match exact path or path with/without trailing slash
-          if (
-            landingPath === normalizedTarget ||
-            landingPath === normalizedTarget + '/' ||
-            landingPath + '/' === normalizedTarget
-          ) {
-            const current = sessionMap.get(targetPath) || 0;
-            sessionMap.set(targetPath, current + (isNaN(sessions) ? 0 : sessions));
-            console.log(`[Shopify] Matched path "${targetPath}" → ${sessions} sessions`);
-          }
-        }
-      }
-
-      console.log(`[Shopify] Matched ${Array.from(sessionMap.values()).filter(v => v > 0).length}/${urlPaths.length} paths with session data`);
-    } else {
-      console.warn('[Shopify] No rows in ShopifyQL sessions response');
-    }
-  } catch (error) {
-    console.error('[Shopify] Failed to fetch landing page sessions:', error);
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Shopify] ShopifyQL HTTP error ${response.status}: ${errorText}`);
+    return [];
   }
 
-  console.log(`[Shopify] Final session map: ${JSON.stringify(Object.fromEntries(sessionMap))}`);
-  return sessionMap;
+  const data = await response.json();
+
+  if (data.errors) {
+    console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
+    return [];
+  }
+
+  const qlResult = data.data?.shopifyqlQuery;
+
+  if (qlResult?.parseErrors?.length > 0) {
+    console.error('[Shopify] ShopifyQL parse errors:', JSON.stringify(qlResult.parseErrors));
+    return [];
+  }
+
+  return qlResult?.tableData?.rows || [];
+}
+
+// Fetch sessions + conversion_rate per landing page path.
+// Returns a map of path → { sessions, conversionRate, orders }
+export async function fetchLandingPageData(
+  shop: string,
+  accessToken: string,
+  urlPaths: string[],
+  dateRange: DateRange
+): Promise<Map<string, LandingPageData>> {
+  const resultMap = new Map<string, LandingPageData>();
+
+  for (const path of urlPaths) {
+    resultMap.set(path, { sessions: 0, conversionRate: 0, orders: 0 });
+  }
+
+  const shopifyqlQuery = `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
+
+  try {
+    console.log(`[Shopify] ShopifyQL sessions+conversion query for ${urlPaths.length} paths`);
+    const rows = await runShopifyQL(shop, accessToken, shopifyqlQuery);
+    console.log(`[Shopify] ShopifyQL returned ${rows.length} landing page rows`);
+
+    for (const row of rows) {
+      const landingPath = String(row.landing_page_path || '').toLowerCase();
+      const sessions = parseInt(String(row.sessions || '0'), 10);
+      const conversionRate = parseFloat(String(row.conversion_rate || '0'));
+
+      for (const targetPath of urlPaths) {
+        const normalizedTarget = targetPath.toLowerCase();
+        if (
+          landingPath === normalizedTarget ||
+          landingPath === normalizedTarget + '/' ||
+          landingPath + '/' === normalizedTarget
+        ) {
+          const orders = Math.round(sessions * conversionRate);
+          resultMap.set(targetPath, { sessions, conversionRate, orders });
+          console.log(`[Shopify] Matched "${targetPath}" → ${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ${orders} orders`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Shopify] Failed to fetch landing page data:', error);
+  }
+
+  console.log(`[Shopify] Final landing page data: ${JSON.stringify(Object.fromEntries(resultMap))}`);
+  return resultMap;
+}
+
+// ============================================================
+// PRODUCT SALES (ShopifyQL — net_sales per product title)
+// ============================================================
+
+// Fetch net_sales per product title from the sales dataset.
+// Returns a map of product_title → net_sales
+export async function fetchProductSales(
+  shop: string,
+  accessToken: string,
+  productTitles: string[],
+  dateRange: DateRange
+): Promise<Map<string, number>> {
+  const salesMap = new Map<string, number>();
+
+  for (const title of productTitles) {
+    salesMap.set(title, 0);
+  }
+
+  const shopifyqlQuery = `FROM sales SHOW net_sales GROUP BY product_title SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
+
+  try {
+    console.log(`[Shopify] ShopifyQL sales query for ${productTitles.length} products`);
+    const rows = await runShopifyQL(shop, accessToken, shopifyqlQuery);
+    console.log(`[Shopify] ShopifyQL sales returned ${rows.length} product rows`);
+
+    for (const row of rows) {
+      const title = String(row.product_title || '');
+      const netSales = parseFloat(String(row.net_sales || '0'));
+
+      for (const targetTitle of productTitles) {
+        if (title.toLowerCase() === targetTitle.toLowerCase()) {
+          salesMap.set(targetTitle, Math.round(netSales * 100) / 100);
+          console.log(`[Shopify] Matched sales "${targetTitle}" → $${netSales}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Shopify] Failed to fetch product sales:', error);
+  }
+
+  return salesMap;
 }
 
 // ============================================================
