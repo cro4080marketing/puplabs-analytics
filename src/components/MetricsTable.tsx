@@ -23,6 +23,13 @@ const METRICS: MetricConfig[] = [
   { key: 'orderCount', label: 'Orders', format: (v) => v.toLocaleString(), higherIsBetter: true },
 ];
 
+function getColumnHeader(page: PageMetrics): string {
+  if (page.productTitle && page.productTitle !== 'Unknown Product') {
+    return page.productTitle;
+  }
+  return page.url;
+}
+
 export default function MetricsTable({ pages, loading }: MetricsTableProps) {
   if (loading) {
     return (
@@ -42,12 +49,11 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
         <p className="text-base font-medium text-gray-500">No data to display</p>
-        <p className="mt-1 text-sm text-gray-400">Add page URLs above and click &quot;Run Comparison&quot;</p>
+        <p className="mt-1 text-sm text-gray-400">Add product page URLs above and click &quot;Run Comparison&quot;</p>
       </div>
     );
   }
 
-  // Find best and worst for each metric
   const bestWorst = findBestWorst(pages);
 
   return (
@@ -60,8 +66,8 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
             </th>
             {pages.map((page, i) => (
               <th key={i} className="pb-3 px-4 text-right text-xs font-semibold uppercase tracking-wider text-gray-400">
-                <div className="max-w-[200px] truncate ml-auto" title={page.url}>
-                  {page.url}
+                <div className="max-w-[200px] truncate ml-auto" title={`${getColumnHeader(page)} (${page.url})`}>
+                  {getColumnHeader(page)}
                 </div>
               </th>
             ))}

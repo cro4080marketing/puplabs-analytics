@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
 import { generatePdfReport } from '@/lib/pdf-generator';
-import { PageMetrics, DateRange, AttributionMethod, TagFilter } from '@/types';
+import { PageMetrics, DateRange, TagFilter } from '@/types';
 
 export async function POST(request: NextRequest) {
   const session = await getShopSession();
@@ -13,17 +13,16 @@ export async function POST(request: NextRequest) {
     const body: {
       pages: PageMetrics[];
       dateRange: DateRange;
-      attributionMethod: AttributionMethod;
       tagFilter?: TagFilter;
     } = await request.json();
 
-    const { pages, dateRange, attributionMethod, tagFilter } = body;
+    const { pages, dateRange, tagFilter } = body;
 
     if (!pages || pages.length === 0) {
       return NextResponse.json({ error: 'No data to export' }, { status: 400 });
     }
 
-    const pdfBuffer = generatePdfReport(pages, dateRange, attributionMethod, tagFilter);
+    const pdfBuffer = generatePdfReport(pages, dateRange, tagFilter);
 
     const fileName = `puplabs-analytics-${dateRange.start}-to-${dateRange.end}.pdf`;
 

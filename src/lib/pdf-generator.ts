@@ -1,10 +1,9 @@
 import jsPDF from 'jspdf';
-import { PageMetrics, DateRange, AttributionMethod, TagFilter } from '@/types';
+import { PageMetrics, DateRange, TagFilter } from '@/types';
 
 export function generatePdfReport(
   pages: PageMetrics[],
   dateRange: DateRange,
-  attributionMethod: AttributionMethod,
   tagFilter?: TagFilter
 ): ArrayBuffer {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
@@ -19,20 +18,19 @@ export function generatePdfReport(
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 100, 100);
   doc.text(`Date Range: ${dateRange.start} to ${dateRange.end}`, 14, 28);
-  doc.text(`Attribution: ${formatAttributionMethod(attributionMethod)}`, 14, 34);
   if (tagFilter && tagFilter.tags.length > 0) {
-    doc.text(`Tag Filter: ${tagFilter.tags.join(` ${tagFilter.logic} `)}`, 14, 40);
+    doc.text(`Tag Filter: ${tagFilter.tags.join(` ${tagFilter.logic} `)}`, 14, 34);
   }
-  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, tagFilter && tagFilter.tags.length > 0 ? 46 : 40);
+  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, tagFilter && tagFilter.tags.length > 0 ? 40 : 34);
 
   // Divider line
-  const startY = tagFilter && tagFilter.tags.length > 0 ? 50 : 44;
+  const startY = tagFilter && tagFilter.tags.length > 0 ? 44 : 38;
   doc.setDrawColor(200, 200, 200);
   doc.line(14, startY, pageWidth - 14, startY);
 
   // Table
   const tableStartY = startY + 8;
-  const metrics = ['URL', 'Sessions', 'Revenue', 'Rev/Visitor', 'Conv. Rate', 'AOV', 'Orders'];
+  const metrics = ['Product', 'Sessions', 'Revenue', 'Rev/Visitor', 'Conv. Rate', 'AOV', 'Orders'];
   const colWidths = [80, 28, 32, 32, 28, 28, 24];
   let x = 14;
 
@@ -63,8 +61,12 @@ export function generatePdfReport(
     }
 
     x = 14;
+    const displayName = page.productTitle !== 'Unknown Product'
+      ? truncateUrl(page.productTitle, 40)
+      : truncateUrl(page.url, 40);
+
     const values = [
-      truncateUrl(page.url, 40),
+      displayName,
       page.sessions.toLocaleString(),
       `$${page.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
       `$${page.revenuePerVisitor.toFixed(2)}`,
@@ -101,16 +103,6 @@ export function generatePdfReport(
   );
 
   return doc.output('arraybuffer');
-}
-
-function formatAttributionMethod(method: AttributionMethod): string {
-  const labels: Record<AttributionMethod, string> = {
-    landing_page: 'Landing Page',
-    last_page: 'Last Page Before Checkout',
-    referrer: 'Referrer',
-    utm: 'UTM Parameters',
-  };
-  return labels[method];
 }
 
 function truncateUrl(url: string, maxLength: number): string {

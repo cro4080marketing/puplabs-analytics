@@ -45,7 +45,84 @@ async function shopifyRequest<T>({ shop, accessToken, endpoint, params }: Shopif
   return response.json() as Promise<T>;
 }
 
-// Fetch all orders with pagination for a given date range
+// ============================================================
+// PRODUCT LOOKUP
+// ============================================================
+
+interface ShopifyProduct {
+  id: number;
+  title: string;
+  handle: string;
+}
+
+// Extract product handle from a URL path like /products/freedom-joint
+export function extractProductHandle(urlPath: string): string | null {
+  const normalized = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+  const match = normalized.match(/^\/products\/([^/?#]+)/);
+  return match ? match[1] : null;
+}
+
+// Look up a product by its handle
+export async function fetchProductByHandle(
+  shop: string,
+  accessToken: string,
+  handle: string
+): Promise<ShopifyProduct | null> {
+  try {
+    // Shopify REST API supports fetching products by handle
+    const data = await shopifyRequest<{ products: ShopifyProduct[] }>({
+      shop,
+      accessToken,
+      endpoint: '/products.json',
+      params: {
+        handle,
+        fields: 'id,title,handle',
+        limit: '1',
+      },
+    });
+
+    return data.products?.[0] || null;
+  } catch (error) {
+    console.error(`[Shopify] Failed to fetch product by handle "${handle}":`, error);
+    return null;
+  }
+}
+
+// Resolve multiple URL paths to product info
+export async function resolveProductsFromUrls(
+  shop: string,
+  accessToken: string,
+  urls: string[]
+): Promise<Map<string, ShopifyProduct>> {
+  const productMap = new Map<string, ShopifyProduct>();
+
+  for (const url of urls) {
+    const handle = extractProductHandle(url);
+    if (!handle) {
+      console.warn(`[Shopify] Could not extract product handle from URL: ${url}`);
+      continue;
+    }
+
+    const product = await fetchProductByHandle(shop, accessToken, handle);
+    if (product) {
+      productMap.set(url, product);
+      console.log(`[Shopify] Resolved "${url}" → Product #${product.id} "${product.title}"`);
+    } else {
+      console.warn(`[Shopify] No product found for handle: ${handle}`);
+    }
+
+    // Rate limiting
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  return productMap;
+}
+
+// ============================================================
+// ORDERS (with line items for product-level matching)
+// ============================================================
+
+// Fetch all orders with line_items for a given date range
 export async function fetchOrders(
   shop: string,
   accessToken: string,
@@ -66,7 +143,7 @@ export async function fetchOrders(
       const url = new URL(`https://${shop}/admin/api/${API_VERSION}/orders.json`);
       url.searchParams.set('limit', '250');
       url.searchParams.set('status', 'any');
-      url.searchParams.set('fields', 'id,total_price,tags,created_at,landing_site,referring_site,source_url,cancelled_at,financial_status');
+      url.searchParams.set('fields', 'id,total_price,tags,created_at,cancelled_at,financial_status,line_items');
       url.searchParams.set('created_at_min', `${dateRange.start}T00:00:00Z`);
       url.searchParams.set('created_at_max', `${dateRange.end}T23:59:59Z`);
       requestUrl = url.toString();
@@ -81,7 +158,7 @@ export async function fetchOrders(
       });
 
       if (!response.ok) {
-        console.error(`Shopify orders API error: ${response.status}`);
+        console.error(`[Shopify] Orders API error: ${response.status}`);
         break;
       }
 
@@ -97,11 +174,12 @@ export async function fetchOrders(
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     } catch (error) {
-      console.error('Failed to fetch orders page:', error);
+      console.error('[Shopify] Failed to fetch orders page:', error);
       break;
     }
   }
 
+  console.log(`[Shopify] Fetched ${allOrders.length} total orders`);
   return allOrders;
 }
 
@@ -118,93 +196,131 @@ function extractNextUrl(linkHeader: string | null): string | null {
   return null;
 }
 
-// Fetch session/page view data using Shopify's GraphQL Admin API
-export async function fetchPageSessions(
+// ============================================================
+// PRODUCT VIEW SESSIONS (via ShopifyQL products dataset)
+// ============================================================
+
+// Try to get product view sessions from the ShopifyQL products dataset.
+// This queries by product_title. If it fails, returns 0 (API limitation).
+export async function fetchProductViewSessions(
   shop: string,
   accessToken: string,
-  urls: string[],
+  productTitles: string[],
   dateRange: DateRange
-): Promise<SessionData[]> {
-  const results: SessionData[] = [];
+): Promise<Map<string, number>> {
+  const sessionMap = new Map<string, number>();
 
-  for (const url of urls) {
-    const urlPath = normalizeUrlPath(url);
-
-    // Use ShopifyQL via GraphQL to get session data
-    const query = `
-      {
-        shopifyqlQuery(query: """
-          FROM sessions
-          WHERE session_landing_page_path = '${urlPath}'
-          AND session_started_at >= '${dateRange.start}'
-          AND session_started_at <= '${dateRange.end}'
-          SHOW sum(sessions) AS sessions
-        """) {
-          __typename
-          ... on TableResponse {
-            tableData {
-              rowData
-            }
-          }
-          parseErrors {
-            code
-            message
-          }
-        }
-      }
-    `;
-
-    try {
-      const response = await fetchWithTimeout(
-        `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
-        {
-          method: 'POST',
-          headers: {
-            'X-Shopify-Access-Token': accessToken,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ query }),
-        },
-        10000 // 10s timeout for GraphQL
-      );
-
-      if (!response.ok) {
-        console.error(`GraphQL error for ${urlPath}: ${response.status}`);
-        results.push({ url, sessions: 0 });
-        continue;
-      }
-
-      const data = await response.json();
-
-      if (data.errors) {
-        console.error(`GraphQL query errors for ${urlPath}:`, data.errors);
-        results.push({ url, sessions: 0 });
-        continue;
-      }
-
-      if (data.data?.shopifyqlQuery?.parseErrors?.length > 0) {
-        console.error(`ShopifyQL parse errors for ${urlPath}:`, data.data.shopifyqlQuery.parseErrors);
-        results.push({ url, sessions: 0 });
-        continue;
-      }
-
-      if (data.data?.shopifyqlQuery?.tableData?.rowData?.[0]) {
-        const sessionCount = parseInt(data.data.shopifyqlQuery.tableData.rowData[0][0] || '0', 10);
-        results.push({ url, sessions: isNaN(sessionCount) ? 0 : sessionCount });
-      } else {
-        results.push({ url, sessions: 0 });
-      }
-    } catch (error) {
-      console.error(`Failed to fetch sessions for ${urlPath}:`, error);
-      results.push({ url, sessions: 0 });
-    }
-
-    // Rate limiting
-    await new Promise(resolve => setTimeout(resolve, 200));
+  // Initialize all to 0
+  for (const title of productTitles) {
+    sessionMap.set(title, 0);
   }
 
-  return results;
+  // Try the ShopifyQL products dataset
+  const shopifyqlQuery = `
+    FROM products
+    SHOW product_title, view_sessions
+    SINCE ${dateRange.start}
+    UNTIL ${dateRange.end}
+  `;
+
+  const query = `
+    {
+      shopifyqlQuery(query: """${shopifyqlQuery}""") {
+        __typename
+        ... on TableResponse {
+          tableData {
+            rowData
+            columns {
+              name
+              dataType
+            }
+          }
+        }
+        parseErrors {
+          code
+          message
+        }
+      }
+    }
+  `;
+
+  try {
+    console.log(`[Shopify] Querying ShopifyQL products dataset for view_sessions...`);
+
+    const response = await fetchWithTimeout(
+      `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': accessToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query }),
+      },
+      10000
+    );
+
+    if (!response.ok) {
+      console.error(`[Shopify] ShopifyQL GraphQL error: ${response.status}`);
+      return sessionMap;
+    }
+
+    const data = await response.json();
+
+    // Check for errors
+    if (data.errors) {
+      console.error('[Shopify] GraphQL errors:', data.errors);
+      return sessionMap;
+    }
+
+    const qlResult = data.data?.shopifyqlQuery;
+
+    if (qlResult?.parseErrors?.length > 0) {
+      console.error('[Shopify] ShopifyQL parse errors:', qlResult.parseErrors);
+      return sessionMap;
+    }
+
+    // Parse the table data
+    const tableData = qlResult?.tableData;
+    if (tableData?.rowData) {
+      // Find column indices
+      const columns = tableData.columns || [];
+      const titleIdx = columns.findIndex((c: { name: string }) =>
+        c.name === 'product_title'
+      );
+      const sessionsIdx = columns.findIndex((c: { name: string }) =>
+        c.name === 'view_sessions'
+      );
+
+      if (titleIdx >= 0 && sessionsIdx >= 0) {
+        for (const row of tableData.rowData) {
+          const title = row[titleIdx];
+          const sessions = parseInt(row[sessionsIdx] || '0', 10);
+
+          // Check if this title matches any of our products (case-insensitive)
+          for (const targetTitle of productTitles) {
+            if (title && targetTitle.toLowerCase() === title.toLowerCase()) {
+              sessionMap.set(targetTitle, isNaN(sessions) ? 0 : sessions);
+            }
+          }
+        }
+        console.log(`[Shopify] ShopifyQL returned ${tableData.rowData.length} product rows`);
+      } else {
+        console.warn('[Shopify] ShopifyQL columns not found. Available:', columns.map((c: { name: string }) => c.name));
+      }
+    } else {
+      console.warn('[Shopify] No tableData in ShopifyQL response');
+    }
+  } catch (error) {
+    console.error('[Shopify] Failed to fetch product view sessions:', error);
+  }
+
+  return sessionMap;
 }
+
+// ============================================================
+// ORDER TAGS
+// ============================================================
 
 // Fetch all unique order tags from the store
 export async function fetchOrderTags(
@@ -234,13 +350,17 @@ export async function fetchOrderTags(
       }
     }
   } catch (error) {
-    console.error('Failed to fetch order tags:', error);
+    console.error('[Shopify] Failed to fetch order tags:', error);
   }
 
   return Array.from(tags).sort();
 }
 
-// Normalize a URL to just the path portion for matching
+// ============================================================
+// HELPERS
+// ============================================================
+
+// Normalize a URL to just the path portion
 export function normalizeUrlPath(url: string): string {
   try {
     if (url.startsWith('http')) {
@@ -274,7 +394,7 @@ export async function fetchShopTimezone(
 // Build the OAuth authorization URL
 export function buildAuthUrl(shop: string): string {
   const apiKey = process.env.SHOPIFY_API_KEY!;
-  const scopes = process.env.SHOPIFY_SCOPES || 'read_analytics,read_orders,read_products';
+  const scopes = process.env.SHOPIFY_SCOPES || 'read_analytics,read_orders,read_products,read_reports';
   const redirectUri = `${process.env.APP_URL}/api/auth/callback`;
 
   const url = new URL(`https://${shop}/admin/oauth/authorize`);

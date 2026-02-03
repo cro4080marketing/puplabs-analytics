@@ -1,12 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { PageMetrics, DateRange, AttributionMethod, TagFilter } from '@/types';
+import { PageMetrics, DateRange, TagFilter } from '@/types';
 
 interface ExportButtonProps {
   pages: PageMetrics[];
   dateRange: DateRange;
-  attributionMethod: AttributionMethod;
   tagFilter: TagFilter;
   disabled?: boolean;
 }
@@ -14,7 +13,6 @@ interface ExportButtonProps {
 export default function ExportButton({
   pages,
   dateRange,
-  attributionMethod,
   tagFilter,
   disabled,
 }: ExportButtonProps) {
@@ -28,7 +26,7 @@ export default function ExportButton({
       const response = await fetch('/api/reports/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pages, dateRange, attributionMethod, tagFilter }),
+        body: JSON.stringify({ pages, dateRange, tagFilter }),
       });
 
       if (!response.ok) throw new Error('Export failed');

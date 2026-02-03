@@ -8,8 +8,6 @@ export interface DateRange {
   end: string;
 }
 
-export type AttributionMethod = 'landing_page' | 'last_page' | 'referrer' | 'utm';
-
 export type TagFilterLogic = 'AND' | 'OR';
 
 export interface TagFilter {
@@ -19,6 +17,7 @@ export interface TagFilter {
 
 export interface PageMetrics {
   url: string;
+  productTitle: string;
   sessions: number;
   totalRevenue: number;
   revenuePerVisitor: number;
@@ -30,16 +29,22 @@ export interface PageMetrics {
 export interface ComparisonRequest {
   urls: string[];
   dateRange: DateRange;
-  attributionMethod: AttributionMethod;
   tagFilter?: TagFilter;
 }
 
 export interface ComparisonResponse {
   pages: PageMetrics[];
   dateRange: DateRange;
-  attributionMethod: AttributionMethod;
   tagFilter?: TagFilter;
   lastUpdated: string;
+}
+
+export interface ShopifyLineItem {
+  product_id: number;
+  title: string;
+  variant_title: string;
+  price: string;
+  quantity: number;
 }
 
 export interface ShopifyOrder {
@@ -47,16 +52,9 @@ export interface ShopifyOrder {
   total_price: string;
   tags: string;
   created_at: string;
-  landing_site: string | null;
-  referring_site: string | null;
-  source_url: string | null;
   cancelled_at: string | null;
   financial_status: string;
-  line_items?: Array<{
-    product_id: number;
-    title: string;
-    variant_title: string;
-  }>;
+  line_items: ShopifyLineItem[];
 }
 
 export interface SessionData {

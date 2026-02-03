@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
-import { fetchPageSessions, fetchOrders } from '@/lib/shopify';
-import { calculateComparison } from '@/lib/calculations';
+import { resolveProductsFromUrls, fetchOrders, fetchProductViewSessions } from '@/lib/shopify';
+import { filterOrdersByTags, getProductOrderData, calculatePageMetrics } from '@/lib/calculations';
 import { getCachedData, setCachedData, generateCacheKey, clearCache } from '@/lib/cache';
 import { ComparisonRequest, ComparisonResponse, PageMetrics } from '@/types';
-
-// Overall route timeout - 45 seconds max
-const ROUTE_TIMEOUT = 45000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -41,9 +38,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: ComparisonRequest & { refresh?: boolean } = await request.json();
-    const { urls, dateRange, attributionMethod, tagFilter, refresh } = body;
+    const { urls, dateRange, tagFilter, refresh } = body;
 
-    console.log(`[Analytics] Request: ${urls.length} URLs, ${dateRange.start} to ${dateRange.end}, method: ${attributionMethod}`);
+    console.log(`[Analytics] Request: ${urls.length} URLs, ${dateRange.start} to ${dateRange.end}`);
 
     if (!urls || urls.length === 0) {
       return NextResponse.json({ error: 'At least one URL is required' }, { status: 400 });
@@ -54,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check cache unless refresh is requested
-    const cacheKey = generateCacheKey({ urls, dateRange, attributionMethod, tagFilter });
+    const cacheKey = generateCacheKey({ urls, dateRange, tagFilter });
 
     if (!refresh) {
       try {
@@ -64,7 +61,7 @@ export async function POST(request: NextRequest) {
           'Cache lookup'
         );
         if (cached) {
-          console.log(`[Analytics] Cache hit, returning cached data (${Date.now() - startTime}ms)`);
+          console.log(`[Analytics] Cache hit (${Date.now() - startTime}ms)`);
           return NextResponse.json(cached);
         }
       } catch (err) {
@@ -78,15 +75,34 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fetch sessions and orders in parallel with timeout
-    console.log('[Analytics] Fetching sessions and orders...');
-    let sessionsData, orders;
-
+    // Step 1: Resolve product page URLs to actual products
+    console.log('[Analytics] Resolving product URLs...');
+    let productMap;
     try {
-      [sessionsData, orders] = await withTimeout(
+      productMap = await withTimeout(
+        resolveProductsFromUrls(session.shop, session.accessToken, urls),
+        15000,
+        'Product resolution'
+      );
+    } catch (err) {
+      console.error(`[Analytics] Product resolution failed (${Date.now() - startTime}ms):`, err);
+      return NextResponse.json(
+        { error: 'Failed to look up products. Check your URLs are valid product pages.' },
+        { status: 504 }
+      );
+    }
+    console.log(`[Analytics] Resolved ${productMap.size}/${urls.length} products`);
+
+    // Step 2: Fetch orders and product sessions in parallel
+    console.log('[Analytics] Fetching orders and product sessions...');
+    const productTitles = Array.from(productMap.values()).map(p => p.title);
+
+    let orders, sessionMap;
+    try {
+      [orders, sessionMap] = await withTimeout(
         Promise.all([
-          fetchPageSessions(session.shop, session.accessToken, urls, dateRange),
           fetchOrders(session.shop, session.accessToken, dateRange),
+          fetchProductViewSessions(session.shop, session.accessToken, productTitles, dateRange),
         ]),
         30000,
         'Shopify API calls'
@@ -99,21 +115,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[Analytics] Got ${sessionsData.length} session records, ${orders.length} orders (${Date.now() - startTime}ms)`);
+    console.log(`[Analytics] Got ${orders.length} orders, ${sessionMap.size} session entries (${Date.now() - startTime}ms)`);
 
-    // Calculate metrics
-    const pages: PageMetrics[] = calculateComparison(
-      urls,
-      sessionsData,
-      orders,
-      attributionMethod,
-      tagFilter
-    );
+    // Step 3: Filter orders by tags if applicable
+    const filteredOrders = filterOrdersByTags(orders, tagFilter);
+    console.log(`[Analytics] After tag filter: ${filteredOrders.length} orders`);
+
+    // Step 4: Calculate metrics for each product page
+    const pages: PageMetrics[] = urls.map(url => {
+      const product = productMap.get(url);
+
+      if (!product) {
+        return calculatePageMetrics(url, 'Unknown Product', 0, 0, 0);
+      }
+
+      // Get orders containing this product and the product-level revenue
+      const { matchingOrders, productRevenue } = getProductOrderData(filteredOrders, product.id);
+
+      // Get sessions for this product
+      const sessions = sessionMap.get(product.title) || 0;
+
+      console.log(`[Analytics] ${url} → "${product.title}": ${sessions} sessions, ${matchingOrders.length} orders, $${productRevenue.toFixed(2)} revenue`);
+
+      return calculatePageMetrics(
+        url,
+        product.title,
+        sessions,
+        productRevenue,
+        matchingOrders.length
+      );
+    });
 
     const response: ComparisonResponse = {
       pages,
       dateRange,
-      attributionMethod,
       tagFilter,
       lastUpdated: new Date().toISOString(),
     };

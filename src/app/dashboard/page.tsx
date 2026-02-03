@@ -7,10 +7,8 @@ import PageSelector from '@/components/PageSelector';
 import TagFilter from '@/components/TagFilter';
 import MetricsTable from '@/components/MetricsTable';
 import ExportButton from '@/components/ExportButton';
-import AttributionSelector from '@/components/AttributionSelector';
 import {
   DateRange,
-  AttributionMethod,
   TagFilter as TagFilterType,
   PageMetrics,
 } from '@/types';
@@ -21,7 +19,6 @@ export default function DashboardPage() {
     end: format(new Date(), 'yyyy-MM-dd'),
   });
   const [urls, setUrls] = useState<string[]>([]);
-  const [attributionMethod, setAttributionMethod] = useState<AttributionMethod>('landing_page');
   const [tagFilter, setTagFilter] = useState<TagFilterType>({ tags: [], logic: 'OR' });
   const [pages, setPages] = useState<PageMetrics[]>([]);
   const [loading, setLoading] = useState(false);
@@ -30,7 +27,7 @@ export default function DashboardPage() {
 
   const runComparison = useCallback(async (refresh = false) => {
     if (urls.length === 0) {
-      setError('Add at least one page URL to compare');
+      setError('Add at least one product page URL to compare');
       return;
     }
 
@@ -48,7 +45,6 @@ export default function DashboardPage() {
         body: JSON.stringify({
           urls,
           dateRange,
-          attributionMethod,
           tagFilter: tagFilter.tags.length > 0 ? tagFilter : undefined,
           refresh,
         }),
@@ -82,7 +78,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [urls, dateRange, attributionMethod, tagFilter]);
+  }, [urls, dateRange, tagFilter]);
 
   const clearComparison = () => {
     setPages([]);
@@ -109,7 +105,6 @@ export default function DashboardPage() {
             <ExportButton
               pages={pages}
               dateRange={dateRange}
-              attributionMethod={attributionMethod}
               tagFilter={tagFilter}
               disabled={pages.length === 0}
             />
@@ -120,10 +115,9 @@ export default function DashboardPage() {
       <main className="mx-auto max-w-7xl px-6 py-6">
         {/* Controls card */}
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          {/* Row 1: Date range and attribution */}
+          {/* Row 1: Date range */}
           <div className="flex flex-wrap items-center gap-4">
             <DateRangePicker dateRange={dateRange} onChange={setDateRange} />
-            <AttributionSelector method={attributionMethod} onChange={setAttributionMethod} />
           </div>
 
           {/* Row 2: Tag filter */}
@@ -133,7 +127,7 @@ export default function DashboardPage() {
 
           {/* Row 3: Page selector */}
           <div className="mt-4 border-t border-gray-100 pt-4">
-            <label className="mb-2 block text-sm font-medium text-gray-500">Page URLs to Compare</label>
+            <label className="mb-2 block text-sm font-medium text-gray-500">Product Page URLs to Compare</label>
             <PageSelector urls={urls} onChange={setUrls} maxPages={6} />
           </div>
 
@@ -203,7 +197,7 @@ export default function DashboardPage() {
         {lastUpdated && (
           <div className="mt-4 flex items-center justify-between text-xs text-gray-400">
             <span>Last updated: {new Date(lastUpdated).toLocaleString()}</span>
-            <span>Data may be delayed 24-48 hours per Shopify Analytics</span>
+            <span>Sessions data may be delayed 24-48 hours per Shopify Analytics</span>
           </div>
         )}
       </main>
