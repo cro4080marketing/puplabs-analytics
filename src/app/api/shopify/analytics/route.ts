@@ -3,7 +3,7 @@ import { getShopSession } from '@/lib/session';
 import {
   resolveProductsFromUrls,
   fetchLandingPageData,
-  fetchProductSales,
+  fetchRevenueForProduct,
   normalizeUrlPath,
 } from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
@@ -102,80 +102,58 @@ export async function POST(request: NextRequest) {
     const urlPaths = urls.map(url => normalizeUrlPath(url));
     console.log(`[Analytics] URL paths: ${JSON.stringify(urlPaths)}`);
 
-    // Get product titles for sales lookup
-    const productTitles = urls
-      .map(url => productMap.get(url)?.title)
-      .filter((t): t is string => !!t);
-    console.log(`[Analytics] Product titles for sales lookup: ${JSON.stringify(productTitles)}`);
-
     try {
-      // Step 2: Fetch ShopifyQL data in parallel
-      // - Landing page data: sessions + conversion_rate per landing_page_path
-      // - Product sales: net_sales per product_title
-      console.log('[Analytics] Fetching ShopifyQL data (sessions + sales)...');
+      // Step 2: Fetch sessions + conversion_rate from ShopifyQL
+      console.log('[Analytics] Fetching ShopifyQL session data...');
 
-      const [landingPageMap, salesMap] = await withTimeout(
-        Promise.all([
-          fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
-          fetchProductSales(session.shop, session.accessToken, productTitles, dateRange),
-        ]),
+      const landingPageMap = await withTimeout(
+        fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
         60000,
-        'ShopifyQL queries'
+        'ShopifyQL sessions query'
       );
 
       console.log(`[Analytics] ShopifyQL data fetched (${Date.now() - startTime}ms)`);
 
-      // Step 3: Build page metrics
-      // Orders come from sessions × conversion_rate (matches Shopify's "Sessions that completed checkout")
-      // Revenue comes from the sales dataset (net_sales per product)
-      // Since sales are per-product (not per-landing-page), we pro-rate revenue:
-      //   landing_page_revenue = (landing_page_orders / total_product_orders) × product_net_sales
-      //   If there's only one landing page per product, it gets all the revenue.
+      // Step 3: For each URL, fetch revenue via GraphQL (first-purchase orders capped to ShopifyQL order count)
+      // This is the hybrid approach:
+      //   - Orders count comes from ShopifyQL (sessions × CVR) — matches Shopify's report
+      //   - Revenue comes from GraphQL first-purchase orders, capped to that count
+      console.log('[Analytics] Fetching revenue per product via GraphQL...');
 
-      // First, sum up total orders across all landing pages per product title
-      // so we can pro-rate revenue
-      const totalOrdersByProduct = new Map<string, number>();
-      for (const url of urls) {
-        const product = productMap.get(url);
-        if (!product) continue;
-        const urlPath = normalizeUrlPath(url);
-        const lpData = landingPageMap.get(urlPath);
-        const orders = lpData?.orders || 0;
-        const existing = totalOrdersByProduct.get(product.title) || 0;
-        totalOrdersByProduct.set(product.title, existing + orders);
-      }
-
-      const pages: PageMetrics[] = urls.map((url, idx) => {
+      const revenuePromises = urls.map(async (url, idx) => {
         const product = productMap.get(url);
         const urlPath = urlPaths[idx];
         const lpData = landingPageMap.get(urlPath);
 
+        if (!product || !lpData || lpData.orders === 0) {
+          return { url, product, lpData, revenue: 0, ordersFound: 0 };
+        }
+
+        const { totalRevenue, ordersFound } = await fetchRevenueForProduct(
+          session.shop, session.accessToken, product.id, dateRange, lpData.orders
+        );
+
+        return { url, product, lpData, revenue: totalRevenue, ordersFound };
+      });
+
+      const revenueResults = await withTimeout(
+        Promise.all(revenuePromises),
+        90000,
+        'GraphQL revenue queries'
+      );
+
+      // Step 4: Build page metrics
+      const pages: PageMetrics[] = revenueResults.map(({ url, product, lpData, revenue, ordersFound }) => {
         if (!product || !lpData) {
-          console.log(`[Analytics] No data for "${urlPath}" — product: ${product?.title || 'unknown'}`);
-          return calculatePageMetrics(
-            url,
-            product?.title || 'Unknown Product',
-            0,
-            0,
-            0
-          );
+          return calculatePageMetrics(url, product?.title || 'Unknown Product', 0, 0, 0);
         }
 
         const { sessions, conversionRate, orders } = lpData;
-        const productNetSales = salesMap.get(product.title) || 0;
-        const totalProductOrders = totalOrdersByProduct.get(product.title) || 0;
-
-        // Pro-rate revenue: this landing page's share of total product revenue
-        let revenue = 0;
-        if (totalProductOrders > 0 && orders > 0) {
-          revenue = (orders / totalProductOrders) * productNetSales;
-        }
 
         console.log(
-          `[Analytics] ${urlPath} → "${product.title}": ` +
+          `[Analytics] ${normalizeUrlPath(url)} → "${product.title}": ` +
           `${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ` +
-          `${orders} orders, $${revenue.toFixed(2)} revenue ` +
-          `(product total: $${productNetSales}, ${totalProductOrders} orders across all pages)`
+          `${orders} orders (ShopifyQL), $${revenue.toFixed(2)} revenue (${ordersFound} first-purchase orders via GraphQL)`
         );
 
         return calculatePageMetrics(url, product.title, sessions, revenue, orders);
