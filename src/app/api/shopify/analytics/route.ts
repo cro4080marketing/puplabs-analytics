@@ -8,7 +8,7 @@ import {
 } from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
 import { getCachedData, setCachedData, generateCacheKey, clearCache } from '@/lib/cache';
-import { ComparisonRequest, ComparisonResponse, PageMetrics } from '@/types';
+import { ComparisonResponse, PageMetrics } from '@/types';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: ComparisonRequest & { refresh?: boolean } = await request.json();
-    const { urls, dateRange, tagFilter, refresh } = body;
+    const { urls, dateRange, refresh } = body;
 
     console.log(`[Analytics] Request: ${urls.length} URLs, ${dateRange.start} to ${dateRange.end}`);
 
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check cache unless refresh is requested
-    const cacheKey = generateCacheKey({ urls, dateRange, tagFilter });
+    const cacheKey = generateCacheKey({ urls, dateRange });
 
     if (!refresh) {
       try {
@@ -159,7 +159,6 @@ export async function POST(request: NextRequest) {
       const response: ComparisonResponse = {
         pages,
         dateRange,
-        tagFilter,
         lastUpdated: new Date().toISOString(),
       };
 

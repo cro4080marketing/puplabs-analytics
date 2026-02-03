@@ -4,12 +4,10 @@ import { useState, useCallback } from 'react';
 import { format, subDays } from 'date-fns';
 import DateRangePicker from '@/components/DateRangePicker';
 import PageSelector from '@/components/PageSelector';
-import TagFilter from '@/components/TagFilter';
 import MetricsTable from '@/components/MetricsTable';
 import ExportButton from '@/components/ExportButton';
 import {
   DateRange,
-  TagFilter as TagFilterType,
   PageMetrics,
 } from '@/types';
 
@@ -19,7 +17,6 @@ export default function DashboardPage() {
     end: format(new Date(), 'yyyy-MM-dd'),
   });
   const [urls, setUrls] = useState<string[]>([]);
-  const [tagFilter, setTagFilter] = useState<TagFilterType>({ tags: [], logic: 'OR' });
   const [pages, setPages] = useState<PageMetrics[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -45,7 +42,6 @@ export default function DashboardPage() {
         body: JSON.stringify({
           urls,
           dateRange,
-          tagFilter: tagFilter.tags.length > 0 ? tagFilter : undefined,
           refresh,
         }),
         signal: controller.signal,
@@ -78,7 +74,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [urls, dateRange, tagFilter]);
+  }, [urls, dateRange]);
 
   const clearComparison = () => {
     setPages([]);
@@ -105,7 +101,6 @@ export default function DashboardPage() {
             <ExportButton
               pages={pages}
               dateRange={dateRange}
-              tagFilter={tagFilter}
               disabled={pages.length === 0}
             />
           </div>
@@ -120,12 +115,7 @@ export default function DashboardPage() {
             <DateRangePicker dateRange={dateRange} onChange={setDateRange} />
           </div>
 
-          {/* Row 2: Tag filter */}
-          <div className="mt-4">
-            <TagFilter tagFilter={tagFilter} onChange={setTagFilter} />
-          </div>
-
-          {/* Row 3: Page selector */}
+          {/* Row 2: Page selector */}
           <div className="mt-4 border-t border-gray-100 pt-4">
             <label className="mb-2 block text-sm font-medium text-gray-500">Product Page URLs to Compare</label>
             <PageSelector urls={urls} onChange={setUrls} maxPages={6} />

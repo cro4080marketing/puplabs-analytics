@@ -291,43 +291,6 @@ export async function fetchProductAOV(
 }
 
 // ============================================================
-// ORDER TAGS
-// ============================================================
-
-export async function fetchOrderTags(
-  shop: string,
-  accessToken: string
-): Promise<string[]> {
-  const tags = new Set<string>();
-
-  try {
-    const data = await shopifyRequest<{ orders: Array<{ tags: string }> }>({
-      shop,
-      accessToken,
-      endpoint: '/orders.json',
-      params: {
-        limit: '250',
-        fields: 'tags',
-        status: 'any',
-      },
-    });
-
-    for (const order of data.orders || []) {
-      if (order.tags) {
-        order.tags.split(',').forEach(tag => {
-          const trimmed = tag.trim();
-          if (trimmed) tags.add(trimmed);
-        });
-      }
-    }
-  } catch (error) {
-    console.error('[Shopify] Failed to fetch order tags:', error);
-  }
-
-  return Array.from(tags).sort();
-}
-
-// ============================================================
 // HELPERS
 // ============================================================
 

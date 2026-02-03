@@ -1,10 +1,9 @@
 import jsPDF from 'jspdf';
-import { PageMetrics, DateRange, TagFilter } from '@/types';
+import { PageMetrics, DateRange } from '@/types';
 
 export function generatePdfReport(
   pages: PageMetrics[],
-  dateRange: DateRange,
-  tagFilter?: TagFilter
+  dateRange: DateRange
 ): ArrayBuffer {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -18,13 +17,10 @@ export function generatePdfReport(
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 100, 100);
   doc.text(`Date Range: ${dateRange.start} to ${dateRange.end}`, 14, 28);
-  if (tagFilter && tagFilter.tags.length > 0) {
-    doc.text(`Tag Filter: ${tagFilter.tags.join(` ${tagFilter.logic} `)}`, 14, 34);
-  }
-  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, tagFilter && tagFilter.tags.length > 0 ? 40 : 34);
+  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 34);
 
   // Divider line
-  const startY = tagFilter && tagFilter.tags.length > 0 ? 44 : 38;
+  const startY = 38;
   doc.setDrawColor(200, 200, 200);
   doc.line(14, startY, pageWidth - 14, startY);
 

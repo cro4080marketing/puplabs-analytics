@@ -8,13 +8,6 @@ export interface DateRange {
   end: string;
 }
 
-export type TagFilterLogic = 'AND' | 'OR';
-
-export interface TagFilter {
-  tags: string[];
-  logic: TagFilterLogic;
-}
-
 export interface PageMetrics {
   url: string;
   productTitle: string;
@@ -29,13 +22,11 @@ export interface PageMetrics {
 export interface ComparisonRequest {
   urls: string[];
   dateRange: DateRange;
-  tagFilter?: TagFilter;
 }
 
 export interface ComparisonResponse {
   pages: PageMetrics[];
   dateRange: DateRange;
-  tagFilter?: TagFilter;
   lastUpdated: string;
 }
 

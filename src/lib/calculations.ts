@@ -1,28 +1,4 @@
-import { ShopifyOrder, PageMetrics, TagFilter, ShopifyLineItem } from '@/types';
-
-// Filter orders by tags
-export function filterOrdersByTags(
-  orders: ShopifyOrder[],
-  tagFilter?: TagFilter
-): ShopifyOrder[] {
-  if (!tagFilter || tagFilter.tags.length === 0) return orders;
-
-  return orders.filter(order => {
-    const orderTags = (order.tags || '')
-      .split(',')
-      .map(t => t.trim().toLowerCase());
-
-    if (tagFilter.logic === 'AND') {
-      return tagFilter.tags.every(tag =>
-        orderTags.includes(tag.toLowerCase())
-      );
-    } else {
-      return tagFilter.tags.some(tag =>
-        orderTags.includes(tag.toLowerCase())
-      );
-    }
-  });
-}
+import { ShopifyOrder, PageMetrics, ShopifyLineItem } from '@/types';
 
 // Find all orders that contain a specific product and calculate total order revenue
 // Revenue uses the FULL order total (not just the product line item) so AOV
