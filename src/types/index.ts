@@ -54,6 +54,7 @@ export interface ShopifyOrder {
   created_at: string;
   cancelled_at: string | null;
   financial_status: string;
+  source_name: string;
   line_items: ShopifyLineItem[];
 }
 

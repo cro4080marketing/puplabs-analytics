@@ -143,7 +143,7 @@ export async function fetchOrders(
       const url = new URL(`https://${shop}/admin/api/${API_VERSION}/orders.json`);
       url.searchParams.set('limit', '250');
       url.searchParams.set('status', 'any');
-      url.searchParams.set('fields', 'id,total_price,tags,created_at,cancelled_at,financial_status,line_items');
+      url.searchParams.set('fields', 'id,total_price,tags,created_at,cancelled_at,financial_status,source_name,line_items');
       url.searchParams.set('created_at_min', `${dateRange.start}T00:00:00Z`);
       url.searchParams.set('created_at_max', `${dateRange.end}T23:59:59Z`);
       requestUrl = url.toString();
@@ -179,8 +179,16 @@ export async function fetchOrders(
     }
   }
 
-  console.log(`[Shopify] Fetched ${allOrders.length} total orders`);
-  return allOrders;
+  // Filter out Recharge subscription rebills — only keep normal Shopify checkout orders
+  const filteredOrders = allOrders.filter(order => {
+    const source = (order.source_name || '').toLowerCase();
+    // Exclude orders created by Recharge (recurring subscription rebills)
+    if (source.includes('recharge')) return false;
+    return true;
+  });
+
+  console.log(`[Shopify] Fetched ${allOrders.length} total orders, ${filteredOrders.length} after excluding Recharge rebills`);
+  return filteredOrders;
 }
 
 function extractNextUrl(linkHeader: string | null): string | null {
