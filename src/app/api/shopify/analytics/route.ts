@@ -8,7 +8,7 @@ import {
 } from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
 import { getCachedData, setCachedData, generateCacheKey, clearCache } from '@/lib/cache';
-import { ComparisonResponse, PageMetrics } from '@/types';
+import { ComparisonRequest, ComparisonResponse, PageMetrics } from '@/types';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
