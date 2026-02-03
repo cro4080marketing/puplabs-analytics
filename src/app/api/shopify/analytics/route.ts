@@ -3,7 +3,7 @@ import { getShopSession } from '@/lib/session';
 import {
   resolveProductsFromUrls,
   fetchLandingPageData,
-  fetchRevenueForProduct,
+  fetchProductAOV,
   normalizeUrlPath,
 } from '@/lib/shopify';
 import { calculatePageMetrics } from '@/lib/calculations';
@@ -102,58 +102,52 @@ export async function POST(request: NextRequest) {
     const urlPaths = urls.map(url => normalizeUrlPath(url));
     console.log(`[Analytics] URL paths: ${JSON.stringify(urlPaths)}`);
 
-    try {
-      // Step 2: Fetch sessions + conversion_rate from ShopifyQL
-      console.log('[Analytics] Fetching ShopifyQL session data...');
+    // Get product titles for sales AOV lookup
+    const productTitles = urls
+      .map(url => productMap.get(url)?.title)
+      .filter((t): t is string => !!t);
 
-      const landingPageMap = await withTimeout(
-        fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
+    try {
+      // Step 2: Fetch all ShopifyQL data in parallel (no GraphQL needed!)
+      // - Sessions + conversion_rate per landing page (sessions dataset)
+      // - Total sales + orders per product title (sales dataset) → gives us AOV
+      console.log('[Analytics] Fetching ShopifyQL data (sessions + sales AOV)...');
+
+      const [landingPageMap, productAOVMap] = await withTimeout(
+        Promise.all([
+          fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
+          fetchProductAOV(session.shop, session.accessToken, productTitles, dateRange),
+        ]),
         60000,
-        'ShopifyQL sessions query'
+        'ShopifyQL queries'
       );
 
       console.log(`[Analytics] ShopifyQL data fetched (${Date.now() - startTime}ms)`);
 
-      // Step 3: For each URL, fetch revenue via GraphQL (first-purchase orders capped to ShopifyQL order count)
-      // This is the hybrid approach:
-      //   - Orders count comes from ShopifyQL (sessions × CVR) — matches Shopify's report
-      //   - Revenue comes from GraphQL first-purchase orders, capped to that count
-      console.log('[Analytics] Fetching revenue per product via GraphQL...');
-
-      const revenuePromises = urls.map(async (url, idx) => {
+      // Step 3: Build page metrics
+      // Orders = sessions × conversion_rate (from sessions dataset — matches Shopify's report)
+      // Revenue = orders × AOV (AOV = total_sales ÷ total_orders from sales dataset)
+      // This keeps everything in ShopifyQL — no GraphQL order guessing needed.
+      const pages: PageMetrics[] = urls.map((url, idx) => {
         const product = productMap.get(url);
         const urlPath = urlPaths[idx];
         const lpData = landingPageMap.get(urlPath);
 
-        if (!product || !lpData || lpData.orders === 0) {
-          return { url, product, lpData, revenue: 0, ordersFound: 0 };
-        }
-
-        const { totalRevenue, ordersFound } = await fetchRevenueForProduct(
-          session.shop, session.accessToken, product.id, dateRange, lpData.orders
-        );
-
-        return { url, product, lpData, revenue: totalRevenue, ordersFound };
-      });
-
-      const revenueResults = await withTimeout(
-        Promise.all(revenuePromises),
-        90000,
-        'GraphQL revenue queries'
-      );
-
-      // Step 4: Build page metrics
-      const pages: PageMetrics[] = revenueResults.map(({ url, product, lpData, revenue, ordersFound }) => {
         if (!product || !lpData) {
+          console.log(`[Analytics] No data for "${urlPath}" — product: ${product?.title || 'unknown'}`);
           return calculatePageMetrics(url, product?.title || 'Unknown Product', 0, 0, 0);
         }
 
         const { sessions, conversionRate, orders } = lpData;
+        const salesData = productAOVMap.get(product.title);
+        const aov = salesData?.aov || 0;
+        const revenue = orders * aov;
 
         console.log(
-          `[Analytics] ${normalizeUrlPath(url)} → "${product.title}": ` +
+          `[Analytics] ${urlPath} → "${product.title}": ` +
           `${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ` +
-          `${orders} orders (ShopifyQL), $${revenue.toFixed(2)} revenue (${ordersFound} first-purchase orders via GraphQL)`
+          `${orders} orders (sessions×CVR), $${aov.toFixed(2)} AOV (sales dataset), ` +
+          `$${revenue.toFixed(2)} revenue (orders×AOV)`
         );
 
         return calculatePageMetrics(url, product.title, sessions, revenue, orders);

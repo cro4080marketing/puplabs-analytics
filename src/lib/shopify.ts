@@ -230,107 +230,58 @@ export async function fetchLandingPageData(
 }
 
 // ============================================================
-// REVENUE (GraphQL — first-purchase orders for a product, capped to ShopifyQL order count)
+// PRODUCT AOV (ShopifyQL — total_sales ÷ orders per product title)
 // ============================================================
 
-// Fetch revenue for a product by getting first-purchase orders via GraphQL.
-// We cap to `maxOrders` (from ShopifyQL sessions × CVR) so revenue reflects
-// only the orders that Shopify attributes to sessions, not ALL orders ever.
-export async function fetchRevenueForProduct(
+export interface ProductSalesData {
+  totalSales: number;
+  orders: number;
+  aov: number; // totalSales / orders
+}
+
+// Fetch total_sales + orders per product title from the sales dataset.
+// Returns a map of product_title → { totalSales, orders, aov }
+export async function fetchProductAOV(
   shop: string,
   accessToken: string,
-  productId: number,
-  dateRange: DateRange,
-  maxOrders: number
-): Promise<{ totalRevenue: number; ordersFound: number }> {
-  if (maxOrders <= 0) {
-    return { totalRevenue: 0, ordersFound: 0 };
+  productTitles: string[],
+  dateRange: DateRange
+): Promise<Map<string, ProductSalesData>> {
+  const resultMap = new Map<string, ProductSalesData>();
+
+  for (const title of productTitles) {
+    resultMap.set(title, { totalSales: 0, orders: 0, aov: 0 });
   }
 
-  let totalRevenue = 0;
-  let ordersFound = 0;
-  let cursor: string | null = null;
-  let hasNextPage = true;
+  const shopifyqlQuery = `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
 
-  // Paginate through orders, collecting first-purchase ones up to maxOrders
-  while (hasNextPage && ordersFound < maxOrders) {
-    const afterClause = cursor ? `, after: "${cursor}"` : '';
-    const query = `
-      {
-        orders(first: 50, query: "product_id:${productId} created_at:>=${dateRange.start} created_at:<=${dateRange.end} financial_status:paid status:open"${afterClause}) {
-          edges {
-            cursor
-            node {
-              id
-              totalPriceSet { shopMoney { amount } }
-              customer { numberOfOrders }
-              cancelledAt
-            }
-          }
-          pageInfo { hasNextPage }
+  try {
+    console.log(`[Shopify] ShopifyQL sales+orders query for ${productTitles.length} products`);
+    const rows = await runShopifyQL(shop, accessToken, shopifyqlQuery);
+    console.log(`[Shopify] ShopifyQL sales returned ${rows.length} product rows`);
+
+    for (const row of rows) {
+      const title = String(row.product_title || '');
+      const totalSales = parseFloat(String(row.total_sales || '0'));
+      const orders = parseInt(String(row.orders || '0'), 10);
+      const aov = orders > 0 ? totalSales / orders : 0;
+
+      for (const targetTitle of productTitles) {
+        if (title.toLowerCase() === targetTitle.toLowerCase()) {
+          resultMap.set(targetTitle, {
+            totalSales: Math.round(totalSales * 100) / 100,
+            orders,
+            aov: Math.round(aov * 100) / 100,
+          });
+          console.log(`[Shopify] Matched sales "${targetTitle}" → $${totalSales.toFixed(2)} / ${orders} orders = $${aov.toFixed(2)} AOV`);
         }
       }
-    `;
-
-    try {
-      const response = await fetchWithTimeout(
-        `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
-        {
-          method: 'POST',
-          headers: {
-            'X-Shopify-Access-Token': accessToken,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ query }),
-        },
-        30000
-      );
-
-      if (!response.ok) {
-        console.error(`[Shopify] GraphQL orders HTTP ${response.status}`);
-        break;
-      }
-
-      const data = await response.json();
-
-      if (data.errors) {
-        console.error('[Shopify] GraphQL orders errors:', JSON.stringify(data.errors));
-        break;
-      }
-
-      const edges = data.data?.orders?.edges || [];
-      hasNextPage = data.data?.orders?.pageInfo?.hasNextPage || false;
-
-      for (const edge of edges) {
-        if (ordersFound >= maxOrders) break;
-
-        const node = edge.node;
-        cursor = edge.cursor;
-
-        // Skip cancelled orders
-        if (node.cancelledAt) continue;
-
-        // First-purchase filter: customer.numberOfOrders === 1
-        const customerOrders = node.customer?.numberOfOrders || 0;
-        if (customerOrders !== 1) continue;
-
-        const price = parseFloat(node.totalPriceSet?.shopMoney?.amount || '0');
-        totalRevenue += price;
-        ordersFound++;
-      }
-
-      // Small delay for rate limiting
-      if (hasNextPage && ordersFound < maxOrders) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-    } catch (error) {
-      console.error('[Shopify] Failed to fetch orders page:', error);
-      break;
     }
+  } catch (error) {
+    console.error('[Shopify] Failed to fetch product AOV:', error);
   }
 
-  console.log(`[Shopify] Revenue for product ${productId}: $${totalRevenue.toFixed(2)} from ${ordersFound}/${maxOrders} first-purchase orders`);
-  return { totalRevenue: Math.round(totalRevenue * 100) / 100, ordersFound };
+  return resultMap;
 }
 
 // ============================================================
