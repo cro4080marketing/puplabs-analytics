@@ -129,19 +129,19 @@ export async function POST(request: NextRequest) {
         return calculatePageMetrics(url, 'Unknown Product', 0, 0, 0);
       }
 
-      // Get orders containing this product and the product-level revenue
-      const { matchingOrders, productRevenue } = getProductOrderData(filteredOrders, product.id);
+      // Get orders containing this product and the full order revenue
+      const { matchingOrders, totalRevenue } = getProductOrderData(filteredOrders, product.id);
 
       // Get sessions for this product
       const sessions = sessionMap.get(product.title) || 0;
 
-      console.log(`[Analytics] ${url} → "${product.title}": ${sessions} sessions, ${matchingOrders.length} orders, $${productRevenue.toFixed(2)} revenue`);
+      console.log(`[Analytics] ${url} → "${product.title}": ${sessions} sessions, ${matchingOrders.length} orders, $${totalRevenue.toFixed(2)} total revenue`);
 
       return calculatePageMetrics(
         url,
         product.title,
         sessions,
-        productRevenue,
+        totalRevenue,
         matchingOrders.length
       );
     });
