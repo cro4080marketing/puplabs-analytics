@@ -1,1 +1,1 @@
-web: npx prisma migrate deploy && npm start
+web: npx prisma db push --accept-data-loss && npm start
