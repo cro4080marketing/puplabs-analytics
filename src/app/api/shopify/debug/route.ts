@@ -4,6 +4,52 @@ import { prisma } from '@/lib/prisma';
 
 const API_VERSION = '2026-01'; // ShopifyQL requires 2025-04+
 
+async function runShopifyQL(shop: string, accessToken: string, qlQuery: string) {
+  const graphqlQuery = `
+    {
+      shopifyqlQuery(query: """${qlQuery}""") {
+        tableData {
+          rows
+          columns {
+            name
+            dataType
+            displayName
+          }
+        }
+        parseErrors
+      }
+    }
+  `;
+
+  const res = await fetch(
+    `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
+    {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: graphqlQuery }),
+    }
+  );
+
+  if (!res.ok) {
+    return { error: `HTTP ${res.status}: ${await res.text()}` };
+  }
+
+  const data = await res.json();
+  if (data.errors) {
+    return { graphqlErrors: data.errors };
+  }
+
+  const ql = data.data?.shopifyqlQuery;
+  return {
+    parseErrors: ql?.parseErrors,
+    tableData: ql?.tableData,
+    rawQuery: qlQuery.trim(),
+  };
+}
+
 // Diagnostic endpoint to test ShopifyQL queries directly
 // GET /api/shopify/debug — tests session data and ShopifyQL access
 export async function GET(request: NextRequest) {
@@ -48,7 +94,7 @@ export async function GET(request: NextRequest) {
     results.scopeError = String(err);
   }
 
-  // Test 1: Check available scopes via a simple shop query
+  // Shop info
   try {
     const shopRes = await fetch(
       `https://${session.shop}/admin/api/${API_VERSION}/shop.json?fields=name,plan_name,myshopify_domain`,
@@ -69,117 +115,45 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test 2: Try ShopifyQL with the products dataset
-  const shopifyqlQuery = `
-    FROM products
-    SHOW sum(view_sessions) AS view_sessions
-    GROUP BY product_title
-    SINCE -30d
-    UNTIL today
-    ORDER BY view_sessions DESC
-    LIMIT 10
-  `;
+  // Test multiple ShopifyQL datasets to find which ones work
+  const datasets = {
+    // Test 1: products dataset (documented for view_sessions)
+    products: `FROM products SHOW product_title, view_sessions SINCE -7d UNTIL today LIMIT 5`,
+    // Test 2: sales dataset (most commonly available)
+    sales: `FROM sales SHOW product_title, net_sales SINCE -7d UNTIL today LIMIT 5`,
+    // Test 3: sessions dataset (shop-level sessions)
+    sessions: `FROM sessions SHOW sessions SINCE -7d UNTIL today LIMIT 5`,
+    // Test 4: orders dataset
+    orders: `FROM orders SHOW order_id SINCE -7d UNTIL today LIMIT 5`,
+    // Test 5: product_views (alternate name)
+    product_views: `FROM product_views SHOW product_title SINCE -7d UNTIL today LIMIT 5`,
+    // Test 6: visits
+    visits: `FROM visits SHOW visits SINCE -7d UNTIL today LIMIT 5`,
+    // Test 7: traffic
+    traffic: `FROM traffic SHOW sessions SINCE -7d UNTIL today LIMIT 5`,
+    // Test 8: product_analytics
+    product_analytics: `FROM product_analytics SHOW product_title SINCE -7d UNTIL today LIMIT 5`,
+  };
 
-  const graphqlQuery = `
-    {
-      shopifyqlQuery(query: """${shopifyqlQuery}""") {
-        tableData {
-          rows
-          columns {
-            name
-            dataType
-            displayName
-          }
-        }
-        parseErrors
-      }
+  const datasetResults: Record<string, unknown> = {};
+
+  // Run all dataset tests in parallel
+  const entries = Object.entries(datasets);
+  const promises = entries.map(async ([name, query]) => {
+    try {
+      const result = await runShopifyQL(session.shop, session.accessToken, query);
+      return [name, result] as [string, unknown];
+    } catch (err) {
+      return [name, { error: String(err) }] as [string, unknown];
     }
-  `;
+  });
 
-  try {
-    const qlRes = await fetch(
-      `https://${session.shop}/admin/api/${API_VERSION}/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': session.accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query: graphqlQuery }),
-      }
-    );
-
-    if (qlRes.ok) {
-      const qlData = await qlRes.json();
-      results.shopifyql = {
-        typename: qlData.data?.shopifyqlQuery?.__typename,
-        parseErrors: qlData.data?.shopifyqlQuery?.parseErrors,
-        graphqlErrors: qlData.errors,
-        tableData: qlData.data?.shopifyqlQuery?.tableData,
-        polarisData: qlData.data?.shopifyqlQuery?.data,
-        rawQuery: shopifyqlQuery.trim(),
-      };
-    } else {
-      const errorText = await qlRes.text();
-      results.shopifyqlError = `HTTP ${qlRes.status}: ${errorText}`;
-    }
-  } catch (err) {
-    results.shopifyqlError = String(err);
+  const settled = await Promise.all(promises);
+  for (const [name, result] of settled) {
+    datasetResults[name] = result;
   }
 
-  // Test 3: Try a simpler ShopifyQL query without aggregation
-  const simpleQuery = `
-    FROM products
-    SHOW product_title, view_sessions
-    SINCE -7d
-    UNTIL today
-    LIMIT 5
-  `;
-
-  const simpleGraphql = `
-    {
-      shopifyqlQuery(query: """${simpleQuery}""") {
-        tableData {
-          rows
-          columns {
-            name
-            dataType
-            displayName
-          }
-        }
-        parseErrors
-      }
-    }
-  `;
-
-  try {
-    const simpleRes = await fetch(
-      `https://${session.shop}/admin/api/${API_VERSION}/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': session.accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query: simpleGraphql }),
-      }
-    );
-
-    if (simpleRes.ok) {
-      const simpleData = await simpleRes.json();
-      results.shopifyqlSimple = {
-        typename: simpleData.data?.shopifyqlQuery?.__typename,
-        parseErrors: simpleData.data?.shopifyqlQuery?.parseErrors,
-        graphqlErrors: simpleData.errors,
-        tableData: simpleData.data?.shopifyqlQuery?.tableData,
-        rawQuery: simpleQuery.trim(),
-      };
-    } else {
-      results.shopifyqlSimpleError = `HTTP ${simpleRes.status}`;
-    }
-  } catch (err) {
-    results.shopifyqlSimpleError = String(err);
-  }
+  results.datasets = datasetResults;
 
   return NextResponse.json(results, {
     headers: { 'Cache-Control': 'no-store' },
