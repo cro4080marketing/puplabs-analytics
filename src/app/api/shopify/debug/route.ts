@@ -115,24 +115,34 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test sales dataset with landing page grouping + try to find conversion/order columns
+  // Test: can we get sales attributed to landing pages?
+  // Shopify's Page CVRs report shows "Order landing page URL" with "Total sales" + "Orders"
+  // so that data MUST be joinable somehow
   const datasets = {
-    // Can sales be grouped by landing_page_path?
-    sales_by_landing: `FROM sales SHOW net_sales GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // Sales with referrer info
-    sales_by_referrer_path: `FROM sales SHOW net_sales GROUP BY referrer_path SINCE -7d UNTIL today LIMIT 10`,
-    // Sales with orders count
-    sales_orders_count: `FROM sales SHOW net_sales, gross_sales, total_sales, ordered_product_quantity GROUP BY product_title SINCE -7d UNTIL today LIMIT 5`,
-    // Sales available columns test
-    sales_all_cols: `FROM sales SHOW net_sales, gross_sales, discounts, returns, taxes, total_sales GROUP BY product_title SINCE -7d UNTIL today LIMIT 3`,
-    // Sessions dataset: what other columns besides sessions exist?
-    sessions_visitors: `FROM sessions SHOW sessions, visitors GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
-    // Sessions with conversion
-    sessions_conversion: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
-    // Sessions with orders
-    sessions_orders: `FROM sessions SHOW sessions, total_orders GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
-    // Sessions with converted
-    sessions_converted: `FROM sessions SHOW sessions, converted GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 5`,
+    // Does sales support landing_page_url?
+    sales_landing_url: `FROM sales SHOW total_sales GROUP BY landing_page_url SINCE -30d UNTIL today LIMIT 10`,
+    // Does sales support landing_page_path?
+    sales_landing_path: `FROM sales SHOW total_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Does sales support page_path?
+    sales_page_path: `FROM sales SHOW total_sales GROUP BY page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Does sales support referrer_url or referrer_path?
+    sales_referrer: `FROM sales SHOW total_sales GROUP BY referrer_url SINCE -30d UNTIL today LIMIT 10`,
+    // Try orders dataset
+    orders_dataset: `FROM orders SHOW total_sales GROUP BY landing_page_url SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with total_sales
+    sessions_sales: `FROM sessions SHOW sessions, total_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with revenue
+    sessions_revenue: `FROM sessions SHOW sessions, revenue GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with order_value
+    sessions_order_value: `FROM sessions SHOW sessions, order_value GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with net_sales
+    sessions_net_sales: `FROM sessions SHOW sessions, net_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with gross_sales
+    sessions_gross_sales: `FROM sessions SHOW sessions, gross_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Try sessions with total_orders
+    sessions_total_orders: `FROM sessions SHOW sessions, total_orders GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Working baseline: sessions + conversion_rate
+    sessions_cvr: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 5`,
   };
 
   const datasetResults: Record<string, unknown> = {};
