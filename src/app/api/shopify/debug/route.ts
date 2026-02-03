@@ -115,24 +115,24 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Explore datasets — no ORDER BY with functions, use simple syntax
+  // Find checkout/conversion columns on the sessions dataset
   const datasets = {
-    // sessions: group by landing_page
-    s_landing_page: `FROM sessions SHOW sessions GROUP BY landing_page SINCE -7d UNTIL today LIMIT 10`,
-    // sessions: group by page_path
-    s_page_path: `FROM sessions SHOW sessions GROUP BY page_path SINCE -7d UNTIL today LIMIT 10`,
-    // sessions: group by referrer_source
-    s_referrer: `FROM sessions SHOW sessions GROUP BY referrer_source SINCE -7d UNTIL today LIMIT 10`,
-    // sessions: group by utm_campaign_name
-    s_utm: `FROM sessions SHOW sessions GROUP BY utm_campaign_name SINCE -7d UNTIL today LIMIT 10`,
-    // sessions: group by landing_page_path
-    s_landing_path: `FROM sessions SHOW sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
-    // sessions: group by page_type or session_token
-    s_page_type: `FROM sessions SHOW sessions GROUP BY page_type SINCE -7d UNTIL today LIMIT 10`,
-    // sales: simple group by product_title (no sum function)
-    sales_product: `FROM sales SHOW net_sales GROUP BY product_title SINCE -7d UNTIL today LIMIT 5`,
-    // sales: what columns exist?
-    sales_basic: `FROM sales SHOW product_title, net_sales SINCE -7d UNTIL today GROUP BY product_title LIMIT 5`,
+    // What checkout columns exist on sessions?
+    checkout_sessions: `FROM sessions SHOW sessions, checkout_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try converted_sessions
+    converted_sessions: `FROM sessions SHOW sessions, converted_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try completed_checkout_sessions
+    completed_checkout: `FROM sessions SHOW sessions, completed_checkout_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try orders column
+    orders_col: `FROM sessions SHOW sessions, orders GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try purchase_sessions
+    purchase_sessions: `FROM sessions SHOW sessions, purchase_sessions GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try total_sales or net_sales on sessions
+    sales_on_sessions: `FROM sessions SHOW sessions, total_sales GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try sessions with cart_additions
+    cart_sessions: `FROM sessions SHOW sessions, sessions_with_cart_addition GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
+    // Try reached_checkout
+    reached_checkout: `FROM sessions SHOW sessions, reached_checkout GROUP BY landing_page_path SINCE -7d UNTIL today LIMIT 10`,
   };
 
   const datasetResults: Record<string, unknown> = {};
