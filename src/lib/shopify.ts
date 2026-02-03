@@ -1,4 +1,4 @@
-import { ShopifyOrder, DateRange, SessionData } from '@/types';
+import { DateRange } from '@/types';
 
 const API_VERSION = '2024-10';
 const FETCH_TIMEOUT = 30000; // 30 seconds per individual API call
@@ -49,13 +49,13 @@ async function shopifyRequest<T>({ shop, accessToken, endpoint, params }: Shopif
 // PRODUCT LOOKUP
 // ============================================================
 
-interface ShopifyProduct {
+export interface ShopifyProduct {
   id: number;
   title: string;
   handle: string;
 }
 
-// Extract product handle from a URL path like /products/freedom-joint
+// Extract product handle from a URL path like /products/freedom-joint-drops
 export function extractProductHandle(urlPath: string): string | null {
   const normalized = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
   const match = normalized.match(/^\/products\/([^/?#]+)/);
@@ -69,7 +69,6 @@ export async function fetchProductByHandle(
   handle: string
 ): Promise<ShopifyProduct | null> {
   try {
-    // Shopify REST API supports fetching products by handle
     const data = await shopifyRequest<{ products: ShopifyProduct[] }>({
       shop,
       accessToken,
@@ -119,98 +118,112 @@ export async function resolveProductsFromUrls(
 }
 
 // ============================================================
-// ORDERS (with line items for product-level matching)
+// PER-PRODUCT ORDER DATA (GraphQL — fast, targeted)
 // ============================================================
 
-// Fetch all orders with line_items for a given date range
-export async function fetchOrders(
+export interface ProductOrderData {
+  orderCount: number;
+  totalRevenue: number;
+}
+
+// Fetch order count and total revenue for a specific product using GraphQL.
+// Uses a search query to find only orders containing this product,
+// then sums up the full order totals. Excludes "Subscription Recurring Order" tagged orders.
+export async function fetchOrdersForProduct(
   shop: string,
   accessToken: string,
+  productId: number,
   dateRange: DateRange
-): Promise<ShopifyOrder[]> {
-  const allOrders: ShopifyOrder[] = [];
-  let nextUrl: string | null = null;
-  let isFirstRequest = true;
+): Promise<ProductOrderData> {
+  let totalRevenue = 0;
+  let orderCount = 0;
+  let cursor: string | null = null;
+  let hasMore = true;
 
-  while (isFirstRequest || nextUrl) {
-    isFirstRequest = false;
+  while (hasMore) {
+    const afterClause = cursor ? `, after: "${cursor}"` : '';
 
-    let requestUrl: string;
-
-    if (nextUrl) {
-      requestUrl = nextUrl;
-    } else {
-      const url = new URL(`https://${shop}/admin/api/${API_VERSION}/orders.json`);
-      url.searchParams.set('limit', '250');
-      url.searchParams.set('status', 'any');
-      url.searchParams.set('fields', 'id,total_price,tags,created_at,cancelled_at,financial_status,source_name,line_items');
-      url.searchParams.set('created_at_min', `${dateRange.start}T00:00:00Z`);
-      url.searchParams.set('created_at_max', `${dateRange.end}T23:59:59Z`);
-      requestUrl = url.toString();
-    }
+    // GraphQL query: search for orders containing this product in the date range
+    const query = `
+      {
+        orders(first: 100, query: "product_id:${productId} created_at:>=${dateRange.start} created_at:<=${dateRange.end} -tag:'Subscription Recurring Order'"${afterClause}) {
+          edges {
+            node {
+              id
+              totalPriceSet {
+                shopMoney {
+                  amount
+                }
+              }
+              tags
+            }
+            cursor
+          }
+          pageInfo {
+            hasNextPage
+          }
+        }
+      }
+    `;
 
     try {
-      const response = await fetchWithTimeout(requestUrl, {
-        headers: {
-          'X-Shopify-Access-Token': accessToken,
-          'Content-Type': 'application/json',
+      const response = await fetchWithTimeout(
+        `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Shopify-Access-Token': accessToken,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query }),
         },
-      });
+        20000
+      );
 
       if (!response.ok) {
-        console.error(`[Shopify] Orders API error: ${response.status}`);
+        console.error(`[Shopify] GraphQL orders error: ${response.status}`);
         break;
       }
 
       const data = await response.json();
-      allOrders.push(...(data.orders || []));
 
-      // Check for next page via Link header
-      const linkHeader = response.headers.get('link');
-      nextUrl = extractNextUrl(linkHeader);
+      if (data.errors) {
+        console.error('[Shopify] GraphQL errors:', JSON.stringify(data.errors));
+        break;
+      }
 
-      // Rate limiting: wait 500ms between requests
-      if (nextUrl) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+      const edges = data.data?.orders?.edges || [];
+
+      for (const edge of edges) {
+        const order = edge.node;
+        const amount = parseFloat(order.totalPriceSet?.shopMoney?.amount || '0');
+        totalRevenue += amount;
+        orderCount++;
+      }
+
+      const pageInfo = data.data?.orders?.pageInfo;
+      hasMore = pageInfo?.hasNextPage === true;
+
+      if (hasMore && edges.length > 0) {
+        cursor = edges[edges.length - 1].cursor;
+        // Rate limiting between pages
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } else {
+        hasMore = false;
       }
     } catch (error) {
-      console.error('[Shopify] Failed to fetch orders page:', error);
+      console.error(`[Shopify] Failed to fetch orders for product ${productId}:`, error);
       break;
     }
   }
 
-  // Filter out Recharge subscription recurring rebills — keep first subscription orders
-  // "Subscription First Order" = real checkout purchase (keep)
-  // "Subscription Recurring Order" = automated rebill (exclude)
-  const filteredOrders = allOrders.filter(order => {
-    const tags = (order.tags || '').toLowerCase();
-    if (tags.includes('subscription recurring order')) return false;
-    return true;
-  });
-
-  console.log(`[Shopify] Fetched ${allOrders.length} total orders, ${filteredOrders.length} after excluding recurring rebills`);
-  return filteredOrders;
-}
-
-function extractNextUrl(linkHeader: string | null): string | null {
-  if (!linkHeader) return null;
-
-  const links = linkHeader.split(',');
-  for (const link of links) {
-    const parts = link.trim().split(';');
-    if (parts.length === 2 && parts[1].trim().includes('rel="next"')) {
-      return parts[0].trim().replace(/[<>]/g, '');
-    }
-  }
-  return null;
+  return { orderCount, totalRevenue: Math.round(totalRevenue * 100) / 100 };
 }
 
 // ============================================================
 // PRODUCT VIEW SESSIONS (via ShopifyQL products dataset)
 // ============================================================
 
-// Try to get product view sessions from the ShopifyQL products dataset.
-// This queries by product_title. If it fails, returns 0 (API limitation).
 export async function fetchProductViewSessions(
   shop: string,
   accessToken: string,
@@ -219,12 +232,10 @@ export async function fetchProductViewSessions(
 ): Promise<Map<string, number>> {
   const sessionMap = new Map<string, number>();
 
-  // Initialize all to 0
   for (const title of productTitles) {
     sessionMap.set(title, 0);
   }
 
-  // Try the ShopifyQL products dataset
   const shopifyqlQuery = `
     FROM products
     SHOW product_title, view_sessions
@@ -276,7 +287,6 @@ export async function fetchProductViewSessions(
 
     const data = await response.json();
 
-    // Check for errors
     if (data.errors) {
       console.error('[Shopify] GraphQL errors:', data.errors);
       return sessionMap;
@@ -289,24 +299,17 @@ export async function fetchProductViewSessions(
       return sessionMap;
     }
 
-    // Parse the table data
     const tableData = qlResult?.tableData;
     if (tableData?.rowData) {
-      // Find column indices
       const columns = tableData.columns || [];
-      const titleIdx = columns.findIndex((c: { name: string }) =>
-        c.name === 'product_title'
-      );
-      const sessionsIdx = columns.findIndex((c: { name: string }) =>
-        c.name === 'view_sessions'
-      );
+      const titleIdx = columns.findIndex((c: { name: string }) => c.name === 'product_title');
+      const sessionsIdx = columns.findIndex((c: { name: string }) => c.name === 'view_sessions');
 
       if (titleIdx >= 0 && sessionsIdx >= 0) {
         for (const row of tableData.rowData) {
           const title = row[titleIdx];
           const sessions = parseInt(row[sessionsIdx] || '0', 10);
 
-          // Check if this title matches any of our products (case-insensitive)
           for (const targetTitle of productTitles) {
             if (title && targetTitle.toLowerCase() === title.toLowerCase()) {
               sessionMap.set(targetTitle, isNaN(sessions) ? 0 : sessions);
@@ -331,7 +334,6 @@ export async function fetchProductViewSessions(
 // ORDER TAGS
 // ============================================================
 
-// Fetch all unique order tags from the store
 export async function fetchOrderTags(
   shop: string,
   accessToken: string
@@ -369,7 +371,6 @@ export async function fetchOrderTags(
 // HELPERS
 // ============================================================
 
-// Normalize a URL to just the path portion
 export function normalizeUrlPath(url: string): string {
   try {
     if (url.startsWith('http')) {
@@ -382,7 +383,6 @@ export function normalizeUrlPath(url: string): string {
   }
 }
 
-// Get the store's timezone
 export async function fetchShopTimezone(
   shop: string,
   accessToken: string
@@ -400,7 +400,6 @@ export async function fetchShopTimezone(
   }
 }
 
-// Build the OAuth authorization URL
 export function buildAuthUrl(shop: string): string {
   const apiKey = process.env.SHOPIFY_API_KEY!;
   const scopes = process.env.SHOPIFY_SCOPES || 'read_analytics,read_orders,read_products,read_reports';
@@ -414,7 +413,6 @@ export function buildAuthUrl(shop: string): string {
   return url.toString();
 }
 
-// Exchange the authorization code for an access token
 export async function exchangeCodeForToken(
   shop: string,
   code: string
