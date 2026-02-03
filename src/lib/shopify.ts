@@ -210,11 +210,7 @@ export async function fetchLandingPageData(
 
       for (const targetPath of urlPaths) {
         const normalizedTarget = targetPath.toLowerCase();
-        if (
-          landingPath === normalizedTarget ||
-          landingPath === normalizedTarget + '/' ||
-          landingPath + '/' === normalizedTarget
-        ) {
+        if (landingPath === normalizedTarget) {
           const orders = Math.round(sessions * conversionRate);
           resultMap.set(targetPath, { sessions, conversionRate, orders });
           console.log(`[Shopify] Matched "${targetPath}" → ${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ${orders} orders`);
