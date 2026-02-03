@@ -115,34 +115,21 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test: can we get sales attributed to landing pages?
-  // Shopify's Page CVRs report shows "Order landing page URL" with "Total sales" + "Orders"
-  // so that data MUST be joinable somehow
+  // Test: find revenue columns that work + validate AOV math
+  // Shopify report shows: /products/prodenta → 33 orders, $3,013.53 total sales → AOV $91.32
   const datasets = {
-    // Does sales support landing_page_url?
-    sales_landing_url: `FROM sales SHOW total_sales GROUP BY landing_page_url SINCE -30d UNTIL today LIMIT 10`,
-    // Does sales support landing_page_path?
-    sales_landing_path: `FROM sales SHOW total_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Does sales support page_path?
-    sales_page_path: `FROM sales SHOW total_sales GROUP BY page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Does sales support referrer_url or referrer_path?
-    sales_referrer: `FROM sales SHOW total_sales GROUP BY referrer_url SINCE -30d UNTIL today LIMIT 10`,
-    // Try orders dataset
-    orders_dataset: `FROM orders SHOW total_sales GROUP BY landing_page_url SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with total_sales
-    sessions_sales: `FROM sessions SHOW sessions, total_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with revenue
-    sessions_revenue: `FROM sessions SHOW sessions, revenue GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with order_value
-    sessions_order_value: `FROM sessions SHOW sessions, order_value GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with net_sales
-    sessions_net_sales: `FROM sessions SHOW sessions, net_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with gross_sales
-    sessions_gross_sales: `FROM sessions SHOW sessions, gross_sales GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Try sessions with total_orders
-    sessions_total_orders: `FROM sessions SHOW sessions, total_orders GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
-    // Working baseline: sessions + conversion_rate
+    // Sales with order count columns
+    sales_ordered_qty: `FROM sales SHOW total_sales, ordered_product_quantity GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
+    sales_orders_count: `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
+    sales_order_count: `FROM sales SHOW total_sales, order_count GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
+    sales_num_orders: `FROM sales SHOW total_sales, number_of_orders GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
+    // Try total_sales on sessions — maybe there's a column we haven't tried
+    sessions_avg_order: `FROM sessions SHOW sessions, average_order_value GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    sessions_aov: `FROM sessions SHOW sessions, aov GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 10`,
+    // Working baseline for reference
     sessions_cvr: `FROM sessions SHOW sessions, conversion_rate GROUP BY landing_page_path SINCE -30d UNTIL today LIMIT 5`,
+    // Sales baseline — total product sales (for AOV calculation)
+    sales_product_totals: `FROM sales SHOW total_sales, net_sales, gross_sales GROUP BY product_title SINCE -30d UNTIL today LIMIT 10`,
   };
 
   const datasetResults: Record<string, unknown> = {};
