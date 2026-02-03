@@ -37,6 +37,10 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
 
+    // Client-side abort controller with 60s timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
     try {
       const response = await fetch('/api/shopify/analytics', {
         method: 'POST',
@@ -48,22 +52,33 @@ export default function DashboardPage() {
           tagFilter: tagFilter.tags.length > 0 ? tagFilter : undefined,
           refresh,
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       if (!response.ok) {
         if (response.status === 401) {
           window.location.href = '/';
           return;
         }
-        throw new Error('Failed to fetch analytics');
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || `Request failed (${response.status})`);
       }
 
       const data = await response.json();
       setPages(data.pages);
       setLastUpdated(data.lastUpdated);
     } catch (err) {
+      clearTimeout(timeout);
       console.error('Comparison error:', err);
-      setError('Failed to fetch analytics data. Please try again.');
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setError('Request timed out. Try a shorter date range or fewer URLs.');
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to fetch analytics data. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
