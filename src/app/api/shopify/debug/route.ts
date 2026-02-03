@@ -115,24 +115,24 @@ export async function GET(request: NextRequest) {
     results.shopError = String(err);
   }
 
-  // Test multiple ShopifyQL datasets to find which ones work
+  // Explore the two working datasets to find product-level session data
   const datasets = {
-    // Test 1: products dataset (documented for view_sessions)
-    products: `FROM products SHOW product_title, view_sessions SINCE -7d UNTIL today LIMIT 5`,
-    // Test 2: sales dataset (most commonly available)
-    sales: `FROM sales SHOW product_title, net_sales SINCE -7d UNTIL today LIMIT 5`,
-    // Test 3: sessions dataset (shop-level sessions)
-    sessions: `FROM sessions SHOW sessions SINCE -7d UNTIL today LIMIT 5`,
-    // Test 4: orders dataset
-    orders: `FROM orders SHOW order_id SINCE -7d UNTIL today LIMIT 5`,
-    // Test 5: product_views (alternate name)
-    product_views: `FROM product_views SHOW product_title SINCE -7d UNTIL today LIMIT 5`,
-    // Test 6: visits
-    visits: `FROM visits SHOW visits SINCE -7d UNTIL today LIMIT 5`,
-    // Test 7: traffic
-    traffic: `FROM traffic SHOW sessions SINCE -7d UNTIL today LIMIT 5`,
-    // Test 8: product_analytics
-    product_analytics: `FROM product_analytics SHOW product_title SINCE -7d UNTIL today LIMIT 5`,
+    // sessions dataset: try grouping by landing_page to get per-page sessions
+    sessions_by_landing_page: `FROM sessions SHOW sum(sessions) GROUP BY landing_page SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
+    // sessions dataset: try grouping by page_path
+    sessions_by_page_path: `FROM sessions SHOW sum(sessions) GROUP BY page_path SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
+    // sessions dataset: try grouping by referrer_path
+    sessions_by_referrer: `FROM sessions SHOW sum(sessions) GROUP BY referrer_source SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
+    // sessions dataset: try grouping by utm_campaign
+    sessions_by_utm: `FROM sessions SHOW sum(sessions) GROUP BY utm_campaign_name SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
+    // sessions dataset: try grouping by landing_page_path
+    sessions_by_landing_path: `FROM sessions SHOW sum(sessions) GROUP BY landing_page_path SINCE -7d UNTIL today ORDER BY sum(sessions) DESC LIMIT 10`,
+    // sales dataset: product-level with group by
+    sales_by_product: `FROM sales SHOW product_title, sum(net_sales) GROUP BY product_title SINCE -7d UNTIL today ORDER BY sum(net_sales) DESC LIMIT 5`,
+    // sales with product_type
+    sales_columns: `FROM sales SHOW product_title, product_type, sum(net_sales), sum(ordered_product_quantity) GROUP BY product_title, product_type SINCE -7d UNTIL today LIMIT 5`,
+    // sessions: just show all possible columns
+    sessions_all: `FROM sessions SHOW sessions SINCE -1d UNTIL today LIMIT 1`,
   };
 
   const datasetResults: Record<string, unknown> = {};
