@@ -127,13 +127,9 @@ export interface ProductOrderData {
   totalRevenue: number;
 }
 
-// Tag to exclude — Recharge subscription rebills
-const REBILL_TAG = 'subscription recurring order';
-
 // Fetch order count and total revenue for a specific product using GraphQL.
-// Uses a search query to find only orders containing this product,
-// then sums up the full order totals. Excludes "Subscription Recurring Order" tagged orders
-// via BOTH query filter AND server-side tag check (belt and suspenders).
+// Only counts first-time purchases: customer.numberOfOrders == 1.
+// This excludes ALL repeat orders (Recharge rebills, manual reorders, etc.)
 export async function fetchOrdersForProduct(
   shop: string,
   accessToken: string,
@@ -142,7 +138,7 @@ export async function fetchOrdersForProduct(
 ): Promise<ProductOrderData> {
   let totalRevenue = 0;
   let orderCount = 0;
-  let skippedRebills = 0;
+  let skippedRepeat = 0;
   let totalFetched = 0;
   let cursor: string | null = null;
   let hasMore = true;
@@ -150,9 +146,7 @@ export async function fetchOrdersForProduct(
   while (hasMore) {
     const afterClause = cursor ? `, after: "${cursor}"` : '';
 
-    // GraphQL query: search for orders containing this product in the date range.
-    // Note: -tag negation may not work reliably in Shopify's search, so we also
-    // do server-side filtering below as a safety net.
+    // Fetch orders with customer data to check if it's their first order
     const query = `
       {
         orders(first: 100, query: "product_id:${productId} created_at:>=${dateRange.start} created_at:<=${dateRange.end}"${afterClause}) {
@@ -166,6 +160,9 @@ export async function fetchOrdersForProduct(
                 }
               }
               tags
+              customer {
+                numberOfOrders
+              }
             }
             cursor
           }
@@ -207,15 +204,11 @@ export async function fetchOrdersForProduct(
 
       for (const edge of edges) {
         const order = edge.node;
-        const orderTags = (order.tags || []) as string[];
+        const customerOrderCount = parseInt(order.customer?.numberOfOrders || '0', 10);
 
-        // Server-side rebill filter: skip orders tagged "Subscription Recurring Order"
-        const isRebill = orderTags.some(
-          (tag: string) => tag.toLowerCase().trim() === REBILL_TAG
-        );
-
-        if (isRebill) {
-          skippedRebills++;
+        // Only count first-time purchases (customer has exactly 1 order total)
+        if (customerOrderCount !== 1) {
+          skippedRepeat++;
           continue;
         }
 
@@ -240,7 +233,7 @@ export async function fetchOrdersForProduct(
     }
   }
 
-  console.log(`[Shopify] Product ${productId}: ${totalFetched} total orders fetched, ${skippedRebills} rebills skipped, ${orderCount} counted, $${Math.round(totalRevenue * 100) / 100} revenue`);
+  console.log(`[Shopify] Product ${productId}: ${totalFetched} total fetched, ${skippedRepeat} repeat customers skipped, ${orderCount} first-time orders counted, $${Math.round(totalRevenue * 100) / 100} revenue`);
   return { orderCount, totalRevenue: Math.round(totalRevenue * 100) / 100 };
 }
 

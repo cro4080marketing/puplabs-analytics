@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
 
 const API_VERSION = '2025-01';
-const REBILL_TAG = 'subscription recurring order';
 
-// Debug endpoint: show raw order data with tag info for a specific product
+// Debug endpoint: show raw order data with customer order count for filtering
 // GET /api/shopify/debug-orders?product_id=XXXXX&days=30
 export async function GET(request: NextRequest) {
   const session = await getShopSession();
@@ -43,6 +42,11 @@ export async function GET(request: NextRequest) {
               }
             }
             tags
+            customer {
+              numberOfOrders
+              firstName
+              lastName
+            }
           }
         }
         pageInfo {
@@ -78,26 +82,24 @@ export async function GET(request: NextRequest) {
     const edges = data.data?.orders?.edges || [];
     const hasMore = data.data?.orders?.pageInfo?.hasNextPage;
 
-    let includedCount = 0;
-    let includedRevenue = 0;
-    let skippedCount = 0;
-    let skippedRevenue = 0;
+    let firstTimeCount = 0;
+    let firstTimeRevenue = 0;
+    let repeatCount = 0;
+    let repeatRevenue = 0;
 
-    const orders = edges.map((edge: { node: { id: string; name: string; createdAt: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; tags: string[] } }) => {
+    const orders = edges.map((edge: { node: { id: string; name: string; createdAt: string; totalPriceSet: { shopMoney: { amount: string; currencyCode: string } }; tags: string[]; customer: { numberOfOrders: string; firstName: string; lastName: string } | null } }) => {
       const order = edge.node;
       const tags = (order.tags || []) as string[];
       const amount = parseFloat(order.totalPriceSet?.shopMoney?.amount || '0');
+      const customerOrderCount = parseInt(order.customer?.numberOfOrders || '0', 10);
+      const isFirstTime = customerOrderCount === 1;
 
-      const isRebill = tags.some(
-        (tag: string) => tag.toLowerCase().trim() === REBILL_TAG
-      );
-
-      if (isRebill) {
-        skippedCount++;
-        skippedRevenue += amount;
+      if (isFirstTime) {
+        firstTimeCount++;
+        firstTimeRevenue += amount;
       } else {
-        includedCount++;
-        includedRevenue += amount;
+        repeatCount++;
+        repeatRevenue += amount;
       }
 
       return {
@@ -106,8 +108,9 @@ export async function GET(request: NextRequest) {
         createdAt: order.createdAt,
         amount,
         tags,
-        isRebill,
-        matchedTag: isRebill ? tags.find((t: string) => t.toLowerCase().trim() === REBILL_TAG) : null,
+        customerOrderCount,
+        isFirstTime,
+        customerName: order.customer ? `${order.customer.firstName || ''} ${order.customer.lastName || ''}`.trim() : 'Guest',
       };
     });
 
@@ -116,11 +119,11 @@ export async function GET(request: NextRequest) {
       dateRange: { start: startDate, end: endDate },
       totalOrdersFetched: edges.length,
       hasMorePages: hasMore,
+      filterMethod: 'customer.numberOfOrders === 1 (first-time purchase only)',
       summary: {
-        included: { count: includedCount, revenue: Math.round(includedRevenue * 100) / 100 },
-        skippedRebills: { count: skippedCount, revenue: Math.round(skippedRevenue * 100) / 100 },
+        firstTimePurchases: { count: firstTimeCount, revenue: Math.round(firstTimeRevenue * 100) / 100 },
+        repeatCustomers: { count: repeatCount, revenue: Math.round(repeatRevenue * 100) / 100 },
       },
-      rebillTagLookingFor: REBILL_TAG,
       orders,
     }, {
       headers: { 'Cache-Control': 'no-store' },
