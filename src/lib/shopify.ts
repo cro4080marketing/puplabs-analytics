@@ -248,20 +248,16 @@ export async function fetchProductViewSessions(
     ORDER BY view_sessions DESC
   `;
 
-  // Use 2026-01 API version where shopifyqlQuery exists on QueryRoot
+  // Use 2026-01 API version — returns ShopifyqlQueryResponse directly (not a union type)
   const query = `
     {
       shopifyqlQuery(query: """${shopifyqlQuery}""") {
-        __typename
-        ... on TableResponse {
-          tableData {
-            rowData
-            rows
-            columns {
-              name
-              dataType
-              displayName
-            }
+        tableData {
+          rows
+          columns {
+            name
+            dataType
+            displayName
           }
         }
         parseErrors

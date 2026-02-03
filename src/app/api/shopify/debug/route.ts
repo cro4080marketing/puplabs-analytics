@@ -83,16 +83,12 @@ export async function GET(request: NextRequest) {
   const graphqlQuery = `
     {
       shopifyqlQuery(query: """${shopifyqlQuery}""") {
-        __typename
-        ... on TableResponse {
-          tableData {
-            rowData
-            rows
-            columns {
-              name
-              dataType
-              displayName
-            }
+        tableData {
+          rows
+          columns {
+            name
+            dataType
+            displayName
           }
         }
         parseErrors
@@ -143,16 +139,12 @@ export async function GET(request: NextRequest) {
   const simpleGraphql = `
     {
       shopifyqlQuery(query: """${simpleQuery}""") {
-        __typename
-        ... on TableResponse {
-          tableData {
-            rowData
-            rows
-            columns {
-              name
-              dataType
-              displayName
-            }
+        tableData {
+          rows
+          columns {
+            name
+            dataType
+            displayName
           }
         }
         parseErrors
