@@ -230,7 +230,7 @@ export async function fetchLandingPageData(
 }
 
 // ============================================================
-// PRODUCT AOV (ShopifyQL — total_sales ÷ orders per product title)
+// PRODUCT AOV (ShopifyQL — total_sales ÷ orders per product_id)
 // ============================================================
 
 export interface ProductSalesData {
@@ -239,42 +239,42 @@ export interface ProductSalesData {
   aov: number; // totalSales / orders
 }
 
-// Fetch total_sales + orders per product title from the sales dataset.
-// Returns a map of product_title → { totalSales, orders, aov }
+// Fetch total_sales + orders per product_id from the sales dataset.
+// Uses product_id (not title) because multiple products can share the same title
+// but have different IDs and very different AOVs.
+// Returns a map of product_id (number) → { totalSales, orders, aov }
 export async function fetchProductAOV(
   shop: string,
   accessToken: string,
-  productTitles: string[],
+  productIds: number[],
   dateRange: DateRange
-): Promise<Map<string, ProductSalesData>> {
-  const resultMap = new Map<string, ProductSalesData>();
+): Promise<Map<number, ProductSalesData>> {
+  const resultMap = new Map<number, ProductSalesData>();
 
-  for (const title of productTitles) {
-    resultMap.set(title, { totalSales: 0, orders: 0, aov: 0 });
+  for (const id of productIds) {
+    resultMap.set(id, { totalSales: 0, orders: 0, aov: 0 });
   }
 
-  const shopifyqlQuery = `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
+  const shopifyqlQuery = `FROM sales SHOW total_sales, orders GROUP BY product_id SINCE ${dateRange.start} UNTIL ${dateRange.end} LIMIT 1000`;
 
   try {
-    console.log(`[Shopify] ShopifyQL sales+orders query for ${productTitles.length} products`);
+    console.log(`[Shopify] ShopifyQL sales+orders by product_id for ${productIds.length} products`);
     const rows = await runShopifyQL(shop, accessToken, shopifyqlQuery);
     console.log(`[Shopify] ShopifyQL sales returned ${rows.length} product rows`);
 
     for (const row of rows) {
-      const title = String(row.product_title || '');
+      const rowProductId = parseInt(String(row.product_id || '0'), 10);
       const totalSales = parseFloat(String(row.total_sales || '0'));
       const orders = parseInt(String(row.orders || '0'), 10);
       const aov = orders > 0 ? totalSales / orders : 0;
 
-      for (const targetTitle of productTitles) {
-        if (title.toLowerCase() === targetTitle.toLowerCase()) {
-          resultMap.set(targetTitle, {
-            totalSales: Math.round(totalSales * 100) / 100,
-            orders,
-            aov: Math.round(aov * 100) / 100,
-          });
-          console.log(`[Shopify] Matched sales "${targetTitle}" → $${totalSales.toFixed(2)} / ${orders} orders = $${aov.toFixed(2)} AOV`);
-        }
+      if (productIds.includes(rowProductId)) {
+        resultMap.set(rowProductId, {
+          totalSales: Math.round(totalSales * 100) / 100,
+          orders,
+          aov: Math.round(aov * 100) / 100,
+        });
+        console.log(`[Shopify] Matched product_id ${rowProductId} → $${totalSales.toFixed(2)} / ${orders} orders = $${aov.toFixed(2)} AOV`);
       }
     }
   } catch (error) {

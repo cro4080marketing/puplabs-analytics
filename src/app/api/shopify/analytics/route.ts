@@ -102,21 +102,22 @@ export async function POST(request: NextRequest) {
     const urlPaths = urls.map(url => normalizeUrlPath(url));
     console.log(`[Analytics] URL paths: ${JSON.stringify(urlPaths)}`);
 
-    // Get product titles for sales AOV lookup
-    const productTitles = urls
-      .map(url => productMap.get(url)?.title)
-      .filter((t): t is string => !!t);
+    // Get product IDs for sales AOV lookup (using ID, not title, since titles can be shared)
+    const productIds = urls
+      .map(url => productMap.get(url)?.id)
+      .filter((id): id is number => !!id);
+    console.log(`[Analytics] Product IDs for AOV lookup: ${JSON.stringify(productIds)}`);
 
     try {
       // Step 2: Fetch all ShopifyQL data in parallel (no GraphQL needed!)
       // - Sessions + conversion_rate per landing page (sessions dataset)
-      // - Total sales + orders per product title (sales dataset) → gives us AOV
-      console.log('[Analytics] Fetching ShopifyQL data (sessions + sales AOV)...');
+      // - Total sales + orders per product_id (sales dataset) → gives us AOV
+      console.log('[Analytics] Fetching ShopifyQL data (sessions + sales AOV by product_id)...');
 
       const [landingPageMap, productAOVMap] = await withTimeout(
         Promise.all([
           fetchLandingPageData(session.shop, session.accessToken, urlPaths, dateRange),
-          fetchProductAOV(session.shop, session.accessToken, productTitles, dateRange),
+          fetchProductAOV(session.shop, session.accessToken, productIds, dateRange),
         ]),
         60000,
         'ShopifyQL queries'
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
 
       // Step 3: Build page metrics
       // Orders = sessions × conversion_rate (from sessions dataset — matches Shopify's report)
-      // Revenue = orders × AOV (AOV = total_sales ÷ total_orders from sales dataset)
+      // Revenue = orders × AOV (AOV = total_sales ÷ total_orders from sales dataset, per product_id)
       // This keeps everything in ShopifyQL — no GraphQL order guessing needed.
       const pages: PageMetrics[] = urls.map((url, idx) => {
         const product = productMap.get(url);
@@ -139,14 +140,14 @@ export async function POST(request: NextRequest) {
         }
 
         const { sessions, conversionRate, orders } = lpData;
-        const salesData = productAOVMap.get(product.title);
+        const salesData = productAOVMap.get(product.id);
         const aov = salesData?.aov || 0;
         const revenue = orders * aov;
 
         console.log(
-          `[Analytics] ${urlPath} → "${product.title}": ` +
+          `[Analytics] ${urlPath} → "${product.title}" (ID: ${product.id}): ` +
           `${sessions} sessions, ${(conversionRate * 100).toFixed(2)}% CVR, ` +
-          `${orders} orders (sessions×CVR), $${aov.toFixed(2)} AOV (sales dataset), ` +
+          `${orders} orders (sessions×CVR), $${aov.toFixed(2)} AOV (product_id sales), ` +
           `$${revenue.toFixed(2)} revenue (orders×AOV)`
         );
 
