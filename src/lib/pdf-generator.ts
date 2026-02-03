@@ -1,8 +1,8 @@
 import jsPDF from 'jspdf';
-import { PageMetrics, DateRange } from '@/types';
+import { GroupMetrics, DateRange } from '@/types';
 
 export function generatePdfReport(
-  pages: PageMetrics[],
+  groups: GroupMetrics[],
   dateRange: DateRange
 ): ArrayBuffer {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
@@ -26,7 +26,7 @@ export function generatePdfReport(
 
   // Table
   const tableStartY = startY + 8;
-  const metrics = ['Product', 'Sessions', 'Revenue', 'Rev/Visitor', 'Conv. Rate', 'AOV', 'Orders'];
+  const metrics = ['Group', 'Sessions', 'Revenue', 'Rev/Visitor', 'Conv. Rate', 'AOV', 'Orders'];
   const colWidths = [80, 28, 32, 32, 28, 28, 24];
   let x = 14;
 
@@ -43,39 +43,37 @@ export function generatePdfReport(
   });
 
   // Find best/worst for highlighting
-  const bestWorst = findBestWorst(pages);
+  const bestWorst = findBestWorst(groups);
 
   // Table rows
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   let y = tableStartY + 14;
 
-  pages.forEach((page, rowIndex) => {
+  groups.forEach((group, rowIndex) => {
     if (rowIndex % 2 === 0) {
       doc.setFillColor(250, 250, 250);
       doc.rect(14, y - 4, pageWidth - 28, 10, 'F');
     }
 
     x = 14;
-    const displayName = page.productTitle !== 'Unknown Product'
-      ? truncateUrl(page.productTitle, 40)
-      : truncateUrl(page.url, 40);
+    const displayName = truncateText(group.name, 40);
 
     const values = [
       displayName,
-      page.sessions.toLocaleString(),
-      `$${page.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-      `$${page.revenuePerVisitor.toFixed(2)}`,
-      `${page.conversionRate.toFixed(2)}%`,
-      `$${page.aov.toFixed(2)}`,
-      page.orderCount.toLocaleString(),
+      group.sessions.toLocaleString(),
+      `$${group.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      `$${group.revenuePerVisitor.toFixed(2)}`,
+      `${group.conversionRate.toFixed(2)}%`,
+      `$${group.aov.toFixed(2)}`,
+      group.orderCount.toLocaleString(),
     ];
 
     values.forEach((value, i) => {
       const metricKey = metrics[i];
       if (i > 0 && bestWorst.best[metricKey] === rowIndex) {
         doc.setTextColor(22, 163, 74); // green
-      } else if (i > 0 && bestWorst.worst[metricKey] === rowIndex && pages.length > 1) {
+      } else if (i > 0 && bestWorst.worst[metricKey] === rowIndex && groups.length > 1) {
         doc.setTextColor(220, 38, 38); // red
       } else {
         doc.setTextColor(60, 60, 60);
@@ -85,7 +83,14 @@ export function generatePdfReport(
       x += colWidths[i];
     });
 
-    y += 10;
+    // Add URLs below group name
+    doc.setFontSize(6);
+    doc.setTextColor(150, 150, 150);
+    const urlList = group.urls.map(u => truncateText(u, 60)).join(', ');
+    doc.text(truncateText(urlList, 120), 16, y + 6);
+    doc.setFontSize(8);
+
+    y += 14;
   });
 
   // Footer
@@ -101,36 +106,36 @@ export function generatePdfReport(
   return doc.output('arraybuffer');
 }
 
-function truncateUrl(url: string, maxLength: number): string {
-  if (url.length <= maxLength) return url;
-  return url.substring(0, maxLength - 3) + '...';
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + '...';
 }
 
-function findBestWorst(pages: PageMetrics[]): {
+function findBestWorst(groups: GroupMetrics[]): {
   best: Record<string, number>;
   worst: Record<string, number>;
 } {
   const best: Record<string, number> = {};
   const worst: Record<string, number> = {};
 
-  if (pages.length < 2) return { best, worst };
+  if (groups.length < 2) return { best, worst };
 
   const metricKeys = [
-    { key: 'Sessions', field: 'sessions' as keyof PageMetrics },
-    { key: 'Revenue', field: 'totalRevenue' as keyof PageMetrics },
-    { key: 'Rev/Visitor', field: 'revenuePerVisitor' as keyof PageMetrics },
-    { key: 'Conv. Rate', field: 'conversionRate' as keyof PageMetrics },
-    { key: 'AOV', field: 'aov' as keyof PageMetrics },
-    { key: 'Orders', field: 'orderCount' as keyof PageMetrics },
+    { key: 'Sessions', field: 'sessions' as keyof GroupMetrics },
+    { key: 'Revenue', field: 'totalRevenue' as keyof GroupMetrics },
+    { key: 'Rev/Visitor', field: 'revenuePerVisitor' as keyof GroupMetrics },
+    { key: 'Conv. Rate', field: 'conversionRate' as keyof GroupMetrics },
+    { key: 'AOV', field: 'aov' as keyof GroupMetrics },
+    { key: 'Orders', field: 'orderCount' as keyof GroupMetrics },
   ];
 
   metricKeys.forEach(({ key, field }) => {
     let bestIdx = 0;
     let worstIdx = 0;
 
-    pages.forEach((page, i) => {
-      if ((page[field] as number) > (pages[bestIdx][field] as number)) bestIdx = i;
-      if ((page[field] as number) < (pages[worstIdx][field] as number)) worstIdx = i;
+    groups.forEach((group, i) => {
+      if ((group[field] as number) > (groups[bestIdx][field] as number)) bestIdx = i;
+      if ((group[field] as number) < (groups[worstIdx][field] as number)) worstIdx = i;
     });
 
     if (bestIdx !== worstIdx) {

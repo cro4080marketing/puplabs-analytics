@@ -1,14 +1,14 @@
 'use client';
 
-import { PageMetrics } from '@/types';
+import { GroupMetrics } from '@/types';
 
 interface MetricsTableProps {
-  pages: PageMetrics[];
+  groups: GroupMetrics[];
   loading: boolean;
 }
 
 interface MetricConfig {
-  key: keyof PageMetrics;
+  key: keyof GroupMetrics;
   label: string;
   format: (value: number) => string;
   higherIsBetter: boolean;
@@ -23,14 +23,7 @@ const METRICS: MetricConfig[] = [
   { key: 'orderCount', label: 'Orders', format: (v) => v.toLocaleString(), higherIsBetter: true },
 ];
 
-function getColumnHeader(page: PageMetrics): string {
-  if (page.productTitle && page.productTitle !== 'Unknown Product') {
-    return page.productTitle;
-  }
-  return page.url;
-}
-
-export default function MetricsTable({ pages, loading }: MetricsTableProps) {
+export default function MetricsTable({ groups, loading }: MetricsTableProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -42,19 +35,19 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
     );
   }
 
-  if (pages.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 py-20">
         <svg className="mb-3 h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
         <p className="text-base font-medium text-gray-500">No data to display</p>
-        <p className="mt-1 text-sm text-gray-400">Add product page URLs above and click &quot;Run Comparison&quot;</p>
+        <p className="mt-1 text-sm text-gray-400">Add product page URLs to each group and click &quot;Run Comparison&quot;</p>
       </div>
     );
   }
 
-  const bestWorst = findBestWorst(pages);
+  const bestWorst = findBestWorst(groups);
 
   return (
     <div className="overflow-x-auto">
@@ -64,14 +57,17 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
             <th className="pb-3 pr-4 text-left text-xs font-semibold uppercase tracking-wider text-gray-400">
               Metric
             </th>
-            {pages.map((page, i) => (
+            {groups.map((group, i) => (
               <th key={i} className="pb-3 px-4 text-right text-xs font-semibold uppercase tracking-wider text-gray-400">
-                <div className="max-w-[200px] truncate ml-auto" title={`${getColumnHeader(page)} (${page.url})`}>
-                  {getColumnHeader(page)}
+                <div className="max-w-[200px] truncate ml-auto" title={group.urls.join(', ')}>
+                  {group.name}
+                </div>
+                <div className="text-[10px] text-gray-300 font-normal">
+                  {group.urls.length} page{group.urls.length !== 1 ? 's' : ''}
                 </div>
               </th>
             ))}
-            {pages.length > 1 && (
+            {groups.length > 1 && (
               <th className="pb-3 pl-4 text-right text-xs font-semibold uppercase tracking-wider text-gray-400">
                 Diff
               </th>
@@ -84,10 +80,10 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
               <td className="py-4 pr-4 text-sm font-medium text-gray-600">
                 {metric.label}
               </td>
-              {pages.map((page, i) => {
-                const value = page[metric.key] as number;
+              {groups.map((group, i) => {
+                const value = group[metric.key] as number;
                 const isBest = bestWorst.best[metric.key] === i;
-                const isWorst = bestWorst.worst[metric.key] === i && pages.length > 1;
+                const isWorst = bestWorst.worst[metric.key] === i && groups.length > 1;
 
                 return (
                   <td key={i} className="py-4 px-4 text-right">
@@ -103,7 +99,7 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
                       >
                         {metric.format(value)}
                       </span>
-                      {isBest && pages.length > 1 && (
+                      {isBest && groups.length > 1 && (
                         <span className="inline-flex items-center rounded-full bg-green-50 px-1.5 py-0.5 text-xs font-medium text-green-700">
                           Best
                         </span>
@@ -117,9 +113,9 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
                   </td>
                 );
               })}
-              {pages.length > 1 && (
+              {groups.length > 1 && (
                 <td className="py-4 pl-4 text-right">
-                  {renderDiff(pages, metric)}
+                  {renderDiff(groups, metric)}
                 </td>
               )}
             </tr>
@@ -130,22 +126,22 @@ export default function MetricsTable({ pages, loading }: MetricsTableProps) {
   );
 }
 
-function findBestWorst(pages: PageMetrics[]): {
-  best: Partial<Record<keyof PageMetrics, number>>;
-  worst: Partial<Record<keyof PageMetrics, number>>;
+function findBestWorst(groups: GroupMetrics[]): {
+  best: Partial<Record<keyof GroupMetrics, number>>;
+  worst: Partial<Record<keyof GroupMetrics, number>>;
 } {
-  const best: Partial<Record<keyof PageMetrics, number>> = {};
-  const worst: Partial<Record<keyof PageMetrics, number>> = {};
+  const best: Partial<Record<keyof GroupMetrics, number>> = {};
+  const worst: Partial<Record<keyof GroupMetrics, number>> = {};
 
-  if (pages.length < 2) return { best, worst };
+  if (groups.length < 2) return { best, worst };
 
   METRICS.forEach(({ key }) => {
     let bestIdx = 0;
     let worstIdx = 0;
 
-    pages.forEach((page, i) => {
-      if ((page[key] as number) > (pages[bestIdx][key] as number)) bestIdx = i;
-      if ((page[key] as number) < (pages[worstIdx][key] as number)) worstIdx = i;
+    groups.forEach((group, i) => {
+      if ((group[key] as number) > (groups[bestIdx][key] as number)) bestIdx = i;
+      if ((group[key] as number) < (groups[worstIdx][key] as number)) worstIdx = i;
     });
 
     if (bestIdx !== worstIdx) {
@@ -157,11 +153,11 @@ function findBestWorst(pages: PageMetrics[]): {
   return { best, worst };
 }
 
-function renderDiff(pages: PageMetrics[], metric: MetricConfig) {
-  if (pages.length !== 2) return <span className="text-xs text-gray-400">--</span>;
+function renderDiff(groups: GroupMetrics[], metric: MetricConfig) {
+  if (groups.length !== 2) return <span className="text-xs text-gray-400">--</span>;
 
-  const a = pages[0][metric.key] as number;
-  const b = pages[1][metric.key] as number;
+  const a = groups[0][metric.key] as number;
+  const b = groups[1][metric.key] as number;
 
   if (a === 0 && b === 0) return <span className="text-xs text-gray-400">--</span>;
 

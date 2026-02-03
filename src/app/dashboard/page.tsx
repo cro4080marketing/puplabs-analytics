@@ -6,9 +6,11 @@ import DateRangePicker from '@/components/DateRangePicker';
 import PageSelector from '@/components/PageSelector';
 import MetricsTable from '@/components/MetricsTable';
 import ExportButton from '@/components/ExportButton';
+import { aggregateGroupMetrics } from '@/lib/calculations';
 import {
   DateRange,
-  PageMetrics,
+  UrlGroup,
+  GroupMetrics,
 } from '@/types';
 
 export default function DashboardPage() {
@@ -16,22 +18,25 @@ export default function DashboardPage() {
     start: format(subDays(new Date(), 30), 'yyyy-MM-dd'),
     end: format(new Date(), 'yyyy-MM-dd'),
   });
-  const [urls, setUrls] = useState<string[]>([]);
-  const [pages, setPages] = useState<PageMetrics[]>([]);
+  const [groupA, setGroupA] = useState<UrlGroup>({ name: 'Group A', urls: [] });
+  const [groupB, setGroupB] = useState<UrlGroup>({ name: 'Group B', urls: [] });
+  const [groups, setGroups] = useState<GroupMetrics[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const allUrls = [...new Set([...groupA.urls, ...groupB.urls])];
+
   const runComparison = useCallback(async (refresh = false) => {
-    if (urls.length === 0) {
-      setError('Add at least one product page URL to compare');
+    const combined = [...new Set([...groupA.urls, ...groupB.urls])];
+    if (groupA.urls.length === 0 || groupB.urls.length === 0) {
+      setError('Add at least one product URL to each group');
       return;
     }
 
     setLoading(true);
     setError(null);
 
-    // Client-side abort controller with 2 min timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
 
@@ -40,7 +45,7 @@ export default function DashboardPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          urls,
+          urls: combined,
           dateRange,
           refresh,
         }),
@@ -59,7 +64,11 @@ export default function DashboardPage() {
       }
 
       const data = await response.json();
-      setPages(data.pages);
+      const aggregated = [
+        aggregateGroupMetrics(groupA.name, groupA.urls, data.pages),
+        aggregateGroupMetrics(groupB.name, groupB.urls, data.pages),
+      ];
+      setGroups(aggregated);
       setLastUpdated(data.lastUpdated);
     } catch (err) {
       clearTimeout(timeout);
@@ -74,11 +83,12 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [urls, dateRange]);
+  }, [groupA, groupB, dateRange]);
 
   const clearComparison = () => {
-    setPages([]);
-    setUrls([]);
+    setGroups([]);
+    setGroupA({ name: 'Group A', urls: [] });
+    setGroupB({ name: 'Group B', urls: [] });
     setLastUpdated(null);
     setError(null);
   };
@@ -99,9 +109,9 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-center gap-3">
             <ExportButton
-              pages={pages}
+              groups={groups}
               dateRange={dateRange}
-              disabled={pages.length === 0}
+              disabled={groups.length === 0}
             />
           </div>
         </div>
@@ -115,17 +125,52 @@ export default function DashboardPage() {
             <DateRangePicker dateRange={dateRange} onChange={setDateRange} />
           </div>
 
-          {/* Row 2: Page selector */}
+          {/* Row 2: URL Groups */}
           <div className="mt-4 border-t border-gray-100 pt-4">
-            <label className="mb-2 block text-sm font-medium text-gray-500">Product Page URLs to Compare</label>
-            <PageSelector urls={urls} onChange={setUrls} maxPages={6} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Group A */}
+              <div className="rounded-lg border border-indigo-200 bg-indigo-50/30 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <input
+                    type="text"
+                    value={groupA.name}
+                    onChange={(e) => setGroupA(prev => ({ ...prev, name: e.target.value }))}
+                    className="text-sm font-semibold text-indigo-700 bg-transparent border-none focus:outline-none focus:ring-0 p-0 w-32"
+                  />
+                  <span className="text-xs text-indigo-400">{groupA.urls.length} page{groupA.urls.length !== 1 ? 's' : ''}</span>
+                </div>
+                <PageSelector
+                  urls={groupA.urls}
+                  onChange={(urls) => setGroupA(prev => ({ ...prev, urls }))}
+                  maxPages={10}
+                />
+              </div>
+
+              {/* Group B */}
+              <div className="rounded-lg border border-amber-200 bg-amber-50/30 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <input
+                    type="text"
+                    value={groupB.name}
+                    onChange={(e) => setGroupB(prev => ({ ...prev, name: e.target.value }))}
+                    className="text-sm font-semibold text-amber-700 bg-transparent border-none focus:outline-none focus:ring-0 p-0 w-32"
+                  />
+                  <span className="text-xs text-amber-400">{groupB.urls.length} page{groupB.urls.length !== 1 ? 's' : ''}</span>
+                </div>
+                <PageSelector
+                  urls={groupB.urls}
+                  onChange={(urls) => setGroupB(prev => ({ ...prev, urls }))}
+                  maxPages={10}
+                />
+              </div>
+            </div>
           </div>
 
           {/* Action buttons */}
           <div className="mt-4 flex items-center gap-3 border-t border-gray-100 pt-4">
             <button
               onClick={() => runComparison(false)}
-              disabled={loading || urls.length === 0}
+              disabled={loading || allUrls.length === 0}
               className="flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-300 transition-colors"
             >
               {loading ? (
@@ -143,7 +188,7 @@ export default function DashboardPage() {
               )}
             </button>
 
-            {pages.length > 0 && (
+            {groups.length > 0 && (
               <>
                 <button
                   onClick={() => runComparison(true)}
@@ -180,7 +225,7 @@ export default function DashboardPage() {
 
         {/* Results card */}
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <MetricsTable pages={pages} loading={loading} />
+          <MetricsTable groups={groups} loading={loading} />
         </div>
 
         {/* Footer */}

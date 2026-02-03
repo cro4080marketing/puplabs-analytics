@@ -1,30 +1,30 @@
 'use client';
 
 import { useState } from 'react';
-import { PageMetrics, DateRange } from '@/types';
+import { GroupMetrics, DateRange } from '@/types';
 
 interface ExportButtonProps {
-  pages: PageMetrics[];
+  groups: GroupMetrics[];
   dateRange: DateRange;
   disabled?: boolean;
 }
 
 export default function ExportButton({
-  pages,
+  groups,
   dateRange,
   disabled,
 }: ExportButtonProps) {
   const [exporting, setExporting] = useState(false);
 
   const handleExport = async () => {
-    if (pages.length === 0) return;
+    if (groups.length === 0) return;
 
     setExporting(true);
     try {
       const response = await fetch('/api/reports/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pages, dateRange }),
+        body: JSON.stringify({ groups, dateRange }),
       });
 
       if (!response.ok) throw new Error('Export failed');
@@ -49,7 +49,7 @@ export default function ExportButton({
   return (
     <button
       onClick={handleExport}
-      disabled={disabled || exporting || pages.length === 0}
+      disabled={disabled || exporting || groups.length === 0}
       className="flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300 transition-colors"
     >
       {exporting ? (

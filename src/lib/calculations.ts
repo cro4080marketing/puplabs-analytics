@@ -1,4 +1,4 @@
-import { ShopifyOrder, PageMetrics, ShopifyLineItem } from '@/types';
+import { ShopifyOrder, PageMetrics, GroupMetrics, ShopifyLineItem } from '@/types';
 
 // Find all orders that contain a specific product and calculate total order revenue
 // Revenue uses the FULL order total (not just the product line item) so AOV
@@ -26,6 +26,34 @@ export function getProductOrderData(
   }
 
   return { matchingOrders, totalRevenue };
+}
+
+// Aggregate metrics across multiple pages into a single group
+export function aggregateGroupMetrics(
+  name: string,
+  urls: string[],
+  pageMetrics: PageMetrics[]
+): GroupMetrics {
+  const matching = pageMetrics.filter(p => urls.includes(p.url));
+
+  const sessions = matching.reduce((sum, p) => sum + p.sessions, 0);
+  const totalRevenue = matching.reduce((sum, p) => sum + p.totalRevenue, 0);
+  const orderCount = matching.reduce((sum, p) => sum + p.orderCount, 0);
+
+  const revenuePerVisitor = sessions > 0 ? totalRevenue / sessions : 0;
+  const conversionRate = sessions > 0 ? (orderCount / sessions) * 100 : 0;
+  const aov = orderCount > 0 ? totalRevenue / orderCount : 0;
+
+  return {
+    name,
+    urls,
+    sessions,
+    totalRevenue: Math.round(totalRevenue * 100) / 100,
+    revenuePerVisitor: Math.round(revenuePerVisitor * 100) / 100,
+    conversionRate: Math.round(conversionRate * 100) / 100,
+    aov: Math.round(aov * 100) / 100,
+    orderCount,
+  };
 }
 
 // Calculate metrics for a single product page

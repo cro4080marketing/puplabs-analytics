@@ -8,6 +8,22 @@ export interface DateRange {
   end: string;
 }
 
+export interface UrlGroup {
+  name: string;
+  urls: string[];
+}
+
+export interface GroupMetrics {
+  name: string;
+  urls: string[];
+  sessions: number;
+  totalRevenue: number;
+  revenuePerVisitor: number;
+  conversionRate: number;
+  aov: number;
+  orderCount: number;
+}
+
 export interface PageMetrics {
   url: string;
   productTitle: string;
