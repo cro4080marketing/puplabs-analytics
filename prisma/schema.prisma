@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id          String   @id @default(cuid())
+  domain      String   @unique
+  accessToken String
+  scope       String
+  timezone    String   @default("America/New_York")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cachedQueries CachedQuery[]
+}
+
+model CachedQuery {
+  id        String   @id @default(cuid())
+  shopId    String
+  queryKey  String
+  data      Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, queryKey])
+  @@index([expiresAt])
+}

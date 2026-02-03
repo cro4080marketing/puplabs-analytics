@@ -1,0 +1,197 @@
+'use client';
+
+import { useState, useCallback } from 'react';
+import { format, subDays } from 'date-fns';
+import DateRangePicker from '@/components/DateRangePicker';
+import PageSelector from '@/components/PageSelector';
+import TagFilter from '@/components/TagFilter';
+import MetricsTable from '@/components/MetricsTable';
+import ExportButton from '@/components/ExportButton';
+import AttributionSelector from '@/components/AttributionSelector';
+import {
+  DateRange,
+  AttributionMethod,
+  TagFilter as TagFilterType,
+  PageMetrics,
+} from '@/types';
+
+export default function DashboardPage() {
+  const [dateRange, setDateRange] = useState<DateRange>({
+    start: format(subDays(new Date(), 30), 'yyyy-MM-dd'),
+    end: format(new Date(), 'yyyy-MM-dd'),
+  });
+  const [urls, setUrls] = useState<string[]>([]);
+  const [attributionMethod, setAttributionMethod] = useState<AttributionMethod>('landing_page');
+  const [tagFilter, setTagFilter] = useState<TagFilterType>({ tags: [], logic: 'OR' });
+  const [pages, setPages] = useState<PageMetrics[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const runComparison = useCallback(async (refresh = false) => {
+    if (urls.length === 0) {
+      setError('Add at least one page URL to compare');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/shopify/analytics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          urls,
+          dateRange,
+          attributionMethod,
+          tagFilter: tagFilter.tags.length > 0 ? tagFilter : undefined,
+          refresh,
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          window.location.href = '/';
+          return;
+        }
+        throw new Error('Failed to fetch analytics');
+      }
+
+      const data = await response.json();
+      setPages(data.pages);
+      setLastUpdated(data.lastUpdated);
+    } catch (err) {
+      console.error('Comparison error:', err);
+      setError('Failed to fetch analytics data. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [urls, dateRange, attributionMethod, tagFilter]);
+
+  const clearComparison = () => {
+    setPages([]);
+    setUrls([]);
+    setLastUpdated(null);
+    setError(null);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-white font-bold text-sm">
+              PL
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900">PupLabs Analytics</h1>
+              <p className="text-xs text-gray-400">Product Page Performance</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <ExportButton
+              pages={pages}
+              dateRange={dateRange}
+              attributionMethod={attributionMethod}
+              tagFilter={tagFilter}
+              disabled={pages.length === 0}
+            />
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-6 py-6">
+        {/* Controls card */}
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          {/* Row 1: Date range and attribution */}
+          <div className="flex flex-wrap items-center gap-4">
+            <DateRangePicker dateRange={dateRange} onChange={setDateRange} />
+            <AttributionSelector method={attributionMethod} onChange={setAttributionMethod} />
+          </div>
+
+          {/* Row 2: Tag filter */}
+          <div className="mt-4">
+            <TagFilter tagFilter={tagFilter} onChange={setTagFilter} />
+          </div>
+
+          {/* Row 3: Page selector */}
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <label className="mb-2 block text-sm font-medium text-gray-500">Page URLs to Compare</label>
+            <PageSelector urls={urls} onChange={setUrls} maxPages={6} />
+          </div>
+
+          {/* Action buttons */}
+          <div className="mt-4 flex items-center gap-3 border-t border-gray-100 pt-4">
+            <button
+              onClick={() => runComparison(false)}
+              disabled={loading || urls.length === 0}
+              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-300 transition-colors"
+            >
+              {loading ? (
+                <>
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-white" />
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  Run Comparison
+                </>
+              )}
+            </button>
+
+            {pages.length > 0 && (
+              <>
+                <button
+                  onClick={() => runComparison(true)}
+                  disabled={loading}
+                  className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300 transition-colors"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Refresh Data
+                </button>
+
+                <button
+                  onClick={clearComparison}
+                  disabled={loading}
+                  className="flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-300 transition-colors"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear & Reset
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Error message */}
+        {error && (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Results card */}
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <MetricsTable pages={pages} loading={loading} />
+        </div>
+
+        {/* Footer */}
+        {lastUpdated && (
+          <div className="mt-4 flex items-center justify-between text-xs text-gray-400">
+            <span>Last updated: {new Date(lastUpdated).toLocaleString()}</span>
+            <span>Data may be delayed 24-48 hours per Shopify Analytics</span>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
