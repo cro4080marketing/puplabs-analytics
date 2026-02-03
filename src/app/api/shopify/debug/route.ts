@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getShopSession } from '@/lib/session';
 import { prisma } from '@/lib/prisma';
 
-const API_VERSION = '2025-01';
+const API_VERSION = '2026-01'; // ShopifyQL requires 2025-04+
 
 // Diagnostic endpoint to test ShopifyQL queries directly
 // GET /api/shopify/debug — tests session data and ShopifyQL access
@@ -87,25 +87,15 @@ export async function GET(request: NextRequest) {
         ... on TableResponse {
           tableData {
             rowData
+            rows
             columns {
               name
               dataType
+              displayName
             }
           }
         }
-        ... on PolarisVizResponse {
-          data {
-            key
-            data {
-              key
-              value
-            }
-          }
-        }
-        parseErrors {
-          code
-          message
-        }
+        parseErrors
       }
     }
   `;
@@ -157,16 +147,15 @@ export async function GET(request: NextRequest) {
         ... on TableResponse {
           tableData {
             rowData
+            rows
             columns {
               name
               dataType
+              displayName
             }
           }
         }
-        parseErrors {
-          code
-          message
-        }
+        parseErrors
       }
     }
   `;

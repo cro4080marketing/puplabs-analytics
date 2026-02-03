@@ -1,6 +1,7 @@
 import { DateRange } from '@/types';
 
 const API_VERSION = '2025-01';
+const SHOPIFYQL_API_VERSION = '2026-01'; // ShopifyQL requires 2025-04+ to be on QueryRoot
 const FETCH_TIMEOUT = 30000; // 30 seconds per individual API call
 
 interface ShopifyRequestOptions {
@@ -247,6 +248,7 @@ export async function fetchProductViewSessions(
     ORDER BY view_sessions DESC
   `;
 
+  // Use 2026-01 API version where shopifyqlQuery exists on QueryRoot
   const query = `
     {
       shopifyqlQuery(query: """${shopifyqlQuery}""") {
@@ -254,25 +256,15 @@ export async function fetchProductViewSessions(
         ... on TableResponse {
           tableData {
             rowData
+            rows
             columns {
               name
               dataType
+              displayName
             }
           }
         }
-        ... on PolarisVizResponse {
-          data {
-            key
-            data {
-              key
-              value
-            }
-          }
-        }
-        parseErrors {
-          code
-          message
-        }
+        parseErrors
       }
     }
   `;
@@ -280,9 +272,10 @@ export async function fetchProductViewSessions(
   try {
     console.log(`[Shopify] ShopifyQL query: ${shopifyqlQuery.trim()}`);
     console.log(`[Shopify] Looking for product titles: ${JSON.stringify(productTitles)}`);
+    console.log(`[Shopify] Using API version: ${SHOPIFYQL_API_VERSION}`);
 
     const response = await fetchWithTimeout(
-      `https://${shop}/admin/api/${API_VERSION}/graphql.json`,
+      `https://${shop}/admin/api/${SHOPIFYQL_API_VERSION}/graphql.json`,
       {
         method: 'POST',
         headers: {
@@ -310,6 +303,7 @@ export async function fetchProductViewSessions(
 
     const qlResult = data.data?.shopifyqlQuery;
 
+    // parseErrors in 2026-01 is [String!]! (array of strings)
     if (qlResult?.parseErrors?.length > 0) {
       console.error('[Shopify] ShopifyQL parse errors:', JSON.stringify(qlResult.parseErrors));
       return sessionMap;
@@ -317,21 +311,24 @@ export async function fetchProductViewSessions(
 
     // Handle TableResponse format
     const tableData = qlResult?.tableData;
-    if (tableData?.rowData) {
+    // 2026-01 uses "rows", older versions used "rowData" — handle both
+    const rows = tableData?.rows || tableData?.rowData;
+
+    if (rows && rows.length > 0) {
       const columns = tableData.columns || [];
       console.log(`[Shopify] ShopifyQL columns: ${JSON.stringify(columns.map((c: { name: string; dataType: string }) => `${c.name}(${c.dataType})`))}`);
-      console.log(`[Shopify] ShopifyQL row count: ${tableData.rowData.length}`);
+      console.log(`[Shopify] ShopifyQL row count: ${rows.length}`);
 
       // Log first 3 rows for debugging
-      for (let i = 0; i < Math.min(3, tableData.rowData.length); i++) {
-        console.log(`[Shopify] ShopifyQL row[${i}]: ${JSON.stringify(tableData.rowData[i])}`);
+      for (let i = 0; i < Math.min(3, rows.length); i++) {
+        console.log(`[Shopify] ShopifyQL row[${i}]: ${JSON.stringify(rows[i])}`);
       }
 
       const titleIdx = columns.findIndex((c: { name: string }) => c.name === 'product_title');
       const sessionsIdx = columns.findIndex((c: { name: string }) => c.name === 'view_sessions');
 
       if (titleIdx >= 0 && sessionsIdx >= 0) {
-        for (const row of tableData.rowData) {
+        for (const row of rows) {
           const title = row[titleIdx];
           const rawSessions = row[sessionsIdx];
           const sessions = typeof rawSessions === 'number' ? rawSessions : parseInt(String(rawSessions || '0'), 10);
@@ -344,32 +341,14 @@ export async function fetchProductViewSessions(
             }
           }
         }
-        console.log(`[Shopify] ShopifyQL returned ${tableData.rowData.length} product rows, matched ${Array.from(sessionMap.values()).filter(v => v > 0).length} products`);
+        console.log(`[Shopify] ShopifyQL returned ${rows.length} product rows, matched ${Array.from(sessionMap.values()).filter(v => v > 0).length} products`);
       } else {
         console.warn(`[Shopify] ShopifyQL column indices — product_title: ${titleIdx}, view_sessions: ${sessionsIdx}`);
         console.warn('[Shopify] Available columns:', columns.map((c: { name: string }) => c.name));
       }
     }
-    // Handle PolarisVizResponse format (alternate response type)
-    else if (qlResult?.data) {
-      console.log(`[Shopify] ShopifyQL returned PolarisVizResponse with ${qlResult.data.length} series`);
-      for (const series of qlResult.data) {
-        const seriesTitle = series.key;
-        for (const point of series.data || []) {
-          if (point.key === 'view_sessions') {
-            const sessions = typeof point.value === 'number' ? point.value : parseInt(String(point.value || '0'), 10);
-            for (const targetTitle of productTitles) {
-              if (seriesTitle && targetTitle.toLowerCase() === String(seriesTitle).toLowerCase()) {
-                sessionMap.set(targetTitle, isNaN(sessions) ? 0 : sessions);
-                console.log(`[Shopify] PolarisViz matched "${targetTitle}" → ${sessions} sessions`);
-              }
-            }
-          }
-        }
-      }
-    }
     else {
-      console.warn('[Shopify] No tableData or data in ShopifyQL response. Full result:', JSON.stringify(qlResult).substring(0, 500));
+      console.warn('[Shopify] No row data in ShopifyQL response. Full result:', JSON.stringify(qlResult).substring(0, 500));
     }
   } catch (error) {
     console.error('[Shopify] Failed to fetch product view sessions:', error);
